@@ -1,0 +1,210 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * OpenSSL Keyring Provider - STORE Loader
+ *
+ * Implements OSSL_STORE interface for loading keys from keyring: URIs
+ */
+
+#include "keyring_provider.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <openssl/core.h>
+#include <openssl/core_dispatch.h>
+#include <openssl/core_names.h>
+#include <openssl/core_object.h>
+#include <openssl/params.h>
+#include <openssl/store.h>
+
+/* Store context */
+typedef struct {
+    keyring_prov_ctx_t *provctx;
+    char *uri;
+    keyring_uri_t parsed_uri;
+    keyring_key_ctx_t *key;
+    int loaded;  /* Whether we've loaded the key yet */
+    int eof;     /* End of file flag */
+} keyring_store_ctx_t;
+
+/* Forward declarations */
+static OSSL_FUNC_store_open_fn keyring_store_open;
+static OSSL_FUNC_store_attach_fn keyring_store_attach;
+static OSSL_FUNC_store_settable_ctx_params_fn keyring_store_settable_ctx_params;
+static OSSL_FUNC_store_set_ctx_params_fn keyring_store_set_ctx_params;
+static OSSL_FUNC_store_load_fn keyring_store_load;
+static OSSL_FUNC_store_eof_fn keyring_store_eof;
+static OSSL_FUNC_store_close_fn keyring_store_close;
+
+/* Dispatch table */
+const OSSL_DISPATCH keyring_store_functions[] = {
+    { OSSL_FUNC_STORE_OPEN, (void (*)(void))keyring_store_open },
+    { OSSL_FUNC_STORE_ATTACH, (void (*)(void))keyring_store_attach },
+    { OSSL_FUNC_STORE_SETTABLE_CTX_PARAMS, (void (*)(void))keyring_store_settable_ctx_params },
+    { OSSL_FUNC_STORE_SET_CTX_PARAMS, (void (*)(void))keyring_store_set_ctx_params },
+    { OSSL_FUNC_STORE_LOAD, (void (*)(void))keyring_store_load },
+    { OSSL_FUNC_STORE_EOF, (void (*)(void))keyring_store_eof },
+    { OSSL_FUNC_STORE_CLOSE, (void (*)(void))keyring_store_close },
+    { 0, NULL }
+};
+
+/* Open keyring store */
+static void *keyring_store_open(void *provctx, const char *uri)
+{
+    keyring_store_ctx_t *ctx;
+    keyring_prov_ctx_t *pctx = provctx;
+
+    if (uri == NULL || strncmp(uri, "keyring:", 8) != 0)
+        return NULL;
+
+    ctx = keyring_zalloc(sizeof(*ctx));
+    if (ctx == NULL)
+        return NULL;
+
+    ctx->provctx = pctx;
+    ctx->uri = keyring_strdup(uri);
+    if (ctx->uri == NULL) {
+        keyring_free(ctx);
+        return NULL;
+    }
+
+    /* Parse URI */
+    if (!keyring_uri_parse(uri, &ctx->parsed_uri)) {
+        keyring_free(ctx->uri);
+        keyring_free(ctx);
+        return NULL;
+    }
+
+    ctx->loaded = 0;
+    ctx->eof = 0;
+
+    return ctx;
+}
+
+/* Attach to existing BIO - not supported */
+static void *keyring_store_attach(void *provctx, OSSL_CORE_BIO *bio)
+{
+    return NULL;
+}
+
+/* Settable context parameters */
+static const OSSL_PARAM *keyring_store_settable_ctx_params(void *provctx)
+{
+    static const OSSL_PARAM params[] = {
+        OSSL_PARAM_END
+    };
+    return params;
+}
+
+/* Set context parameters */
+static int keyring_store_set_ctx_params(void *loaderctx, const OSSL_PARAM params[])
+{
+    return 1;
+}
+
+/* Load key from keyring */
+static int keyring_store_load(void *loaderctx, OSSL_CALLBACK *object_cb,
+                              void *object_cbarg, OSSL_PASSPHRASE_CALLBACK *pw_cb,
+                              void *pw_cbarg)
+{
+    keyring_store_ctx_t *ctx = loaderctx;
+    keyring_key_ctx_t *key = NULL;
+    key_serial_t key_serial = -1;
+    OSSL_PARAM params[4];
+    int object_type;
+    const char *data_type = "RSA";
+    const char *data_structure = NULL;
+    int param_idx = 0;
+
+    if (ctx == NULL || ctx->loaded || ctx->eof)
+        return 0;
+
+    /* Allocate key context */
+    key = keyring_key_new();
+    if (key == NULL)
+        goto err;
+
+    /* Load key based on URI attributes */
+    if (ctx->parsed_uri.has_id) {
+        /* Load by serial ID */
+        key_serial = ctx->parsed_uri.id;
+        if (!keyring_key_load_by_id(key_serial, key))
+            goto err;
+    } else if (ctx->parsed_uri.has_object) {
+        /* Load by description */
+        if (!keyring_key_load_by_description(ctx->parsed_uri.object,
+                                              ctx->parsed_uri.keyring, key))
+            goto err;
+    } else {
+        /* No identifier specified */
+        goto err;
+    }
+
+    /* Determine object type based on key type */
+    switch (ctx->parsed_uri.type) {
+    case KEYRING_KEY_TYPE_PRIVATE:
+        object_type = OSSL_OBJECT_PKEY;
+        break;
+    case KEYRING_KEY_TYPE_PUBLIC:
+        object_type = OSSL_OBJECT_PKEY;  /* Public keys are also PKEY */
+        break;
+    case KEYRING_KEY_TYPE_CERT:
+        object_type = OSSL_OBJECT_CERT;
+        break;
+    case KEYRING_KEY_TYPE_UNKNOWN:
+    default:
+        object_type = OSSL_OBJECT_PKEY;  /* Default to private key */
+        break;
+    }
+
+    /* Build parameter array for object callback */
+    params[param_idx++] = OSSL_PARAM_construct_int(OSSL_OBJECT_PARAM_TYPE, &object_type);
+    params[param_idx++] = OSSL_PARAM_construct_utf8_string(OSSL_OBJECT_PARAM_DATA_TYPE,
+                                                           (char *)data_type, 0);
+
+    /* For keyring keys, we pass the key context directly */
+    params[param_idx++] = OSSL_PARAM_construct_octet_string(OSSL_OBJECT_PARAM_REFERENCE,
+                                                            &key, sizeof(key));
+    params[param_idx++] = OSSL_PARAM_construct_end();
+
+    /* Call the object callback */
+    if (!object_cb(params, object_cbarg)) {
+        goto err;
+    }
+
+    /* Mark as loaded and EOF */
+    ctx->loaded = 1;
+    ctx->eof = 1;
+    ctx->key = key;  /* Store reference so we don't free it prematurely */
+
+    return 1;
+
+err:
+    if (key != NULL)
+        keyring_key_free(key);
+    ctx->eof = 1;
+    return 0;
+}
+
+/* Check if EOF */
+static int keyring_store_eof(void *loaderctx)
+{
+    keyring_store_ctx_t *ctx = loaderctx;
+    return ctx == NULL || ctx->eof;
+}
+
+/* Close store */
+static int keyring_store_close(void *loaderctx)
+{
+    keyring_store_ctx_t *ctx = loaderctx;
+
+    if (ctx == NULL)
+        return 1;
+
+    keyring_uri_free(&ctx->parsed_uri);
+    keyring_free(ctx->uri);
+
+    /* Note: ctx->key is managed by the key management layer, don't free here */
+
+    keyring_free(ctx);
+    return 1;
+}

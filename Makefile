@@ -34,6 +34,7 @@ PROVIDER_SRCS = $(SRC_DIR)/provider.c \
                 $(SRC_DIR)/keyring_rsa.c \
                 $(SRC_DIR)/keyring_signature.c \
                 $(SRC_DIR)/keyring_asym_cipher.c \
+                $(SRC_DIR)/keyring_store.c \
                 $(SRC_DIR)/keyring_tpm.c \
                 $(SRC_DIR)/util.c
 

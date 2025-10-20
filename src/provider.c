@@ -37,14 +37,12 @@ static const OSSL_ALGORITHM keyring_asym_cipher[] = {
     { NULL, NULL, NULL, NULL }
 };
 
-/* Store dispatch table - not implemented yet */
-/*
+/* Store dispatch table */
 static const OSSL_ALGORITHM keyring_store_alg[] = {
-    { "keyring", "provider=keyring", NULL,
+    { "keyring", "provider=keyring", keyring_store_functions,
       "Keyring Store" },
     { NULL, NULL, NULL, NULL }
 };
-*/
 
 /* Gettable parameters */
 static const OSSL_PARAM keyring_param_types[] = {
@@ -95,10 +93,8 @@ const OSSL_ALGORITHM *keyring_query_operation(void *provctx __attribute__((unuse
         return keyring_signature;
     case OSSL_OP_ASYM_CIPHER:
         return keyring_asym_cipher;
-    /* Store not implemented yet
     case OSSL_OP_STORE:
         return keyring_store_alg;
-    */
     }
 
     return NULL;

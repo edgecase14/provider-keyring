@@ -150,6 +150,9 @@ extern const OSSL_DISPATCH keyring_rsa_signature_functions[];
 /* keyring_asym_cipher.c */
 extern const OSSL_DISPATCH keyring_rsa_asym_cipher_functions[];
 
+/* keyring_store.c */
+extern const OSSL_DISPATCH keyring_store_functions[];
+
 /* keyring_tpm.c - kernel keyring crypto operations */
 int keyring_pkey_init(keyring_prov_ctx_t *ctx);
 void keyring_pkey_cleanup(keyring_prov_ctx_t *ctx);
@@ -170,6 +173,8 @@ char *keyring_strdup(const char *s);
 void keyring_error(int lib, int reason, const char *fmt, ...);
 int keyring_key_get_public(key_serial_t key_serial, unsigned char **data,
                           size_t *len);
+int keyring_key_query(key_serial_t key_serial, unsigned int *key_size,
+                      unsigned int *supported_ops);
 char *keyring_key_get_description(key_serial_t key_serial);
 key_serial_t keyring_search_key(const char *description, keyring_type_t keyring_type);
 keyring_key_type_t keyring_parse_key_type(const char *type_str);

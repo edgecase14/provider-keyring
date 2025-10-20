@@ -91,6 +91,7 @@ int keyring_key_load_by_id(key_serial_t id, keyring_key_ctx_t *ctx)
     unsigned char *pubkey_data = NULL;
     size_t pubkey_len = 0;
     char *desc = NULL;
+    unsigned int key_size_bits = 0;
 
     if (ctx == NULL || id < 0)
         return 0;
@@ -100,26 +101,39 @@ int keyring_key_load_by_id(key_serial_t id, keyring_key_ctx_t *ctx)
     if (desc == NULL)
         return 0;
 
-    /* Get public key data */
-    if (!keyring_key_get_public(id, &pubkey_data, &pubkey_len)) {
-        keyring_free(desc);
-        return 0;
+    /* Try to get public key data (works for "user" type keys) */
+    if (keyring_key_get_public(id, &pubkey_data, &pubkey_len)) {
+        /* Successfully read public key - parse it */
+        const unsigned char *p = pubkey_data;
+        EVP_PKEY *pkey = d2i_PUBKEY(NULL, &p, pubkey_len);
+        if (pkey != NULL) {
+            ctx->key_size = EVP_PKEY_bits(pkey);
+            /* Cache EVP_PKEY for public key operations (verify, encrypt) */
+            ctx->evp_pkey = pkey;
+        }
+
+        ctx->public_key = pubkey_data;
+        ctx->public_key_len = pubkey_len;
+    } else {
+        /* Reading failed - this is an asymmetric key (X.509 cert, TPM key)
+         * Use keyctl_pkey_query to get key information */
+        if (!keyring_key_query(id, &key_size_bits, NULL)) {
+            keyring_free(desc);
+            return 0;
+        }
+
+        ctx->key_size = (int)key_size_bits;
+        ctx->public_key = NULL;
+        ctx->public_key_len = 0;
+        ctx->evp_pkey = NULL;
+
+        /* For asymmetric keys without public key data, verification will need
+         * to use an external public key or extract from the cert file */
     }
 
     /* Store in context */
     ctx->key_serial = id;
     ctx->description = desc;
-    ctx->public_key = pubkey_data;
-    ctx->public_key_len = pubkey_len;
-
-    /* Parse public key to get key size and cache EVP_PKEY for public operations */
-    const unsigned char *p = pubkey_data;
-    EVP_PKEY *pkey = d2i_PUBKEY(NULL, &p, pubkey_len);
-    if (pkey != NULL) {
-        ctx->key_size = EVP_PKEY_bits(pkey);
-        /* Cache EVP_PKEY for public key operations (verify, encrypt) */
-        ctx->evp_pkey = pkey;
-    }
 
     return 1;
 }

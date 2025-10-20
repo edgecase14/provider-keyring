@@ -90,13 +90,18 @@ int keyring_key_get_public(key_serial_t key_serial, unsigned char **data,
     void *buffer = NULL;
     size_t buflen = 0;
 
-    /* First call to get the size */
+    /* Try to read the key data (works for "user" type keys, not "asymmetric") */
     ret = keyctl_read(key_serial, NULL, 0);
     if (ret < 0) {
-        keyring_error(0, KEYRING_ERR_OPERATION,
-                     "Failed to read key size for serial %d: %ld",
-                     key_serial, ret);
-        return 0;
+        /* Reading failed - likely an asymmetric key
+         * For asymmetric keys (X.509 certs, TPM keys), the kernel doesn't
+         * allow reading the raw key data. We'll need to extract the public
+         * key from the certificate using a different method.
+         * Return failure here and let the caller handle it.
+         */
+        *data = NULL;
+        *len = 0;
+        return 0;  /* Not an error - just means key is asymmetric type */
     }
 
     buflen = (size_t)ret;
@@ -116,6 +121,30 @@ int keyring_key_get_public(key_serial_t key_serial, unsigned char **data,
 
     *data = buffer;
     *len = (size_t)ret;
+    return 1;
+}
+
+/* Query asymmetric key information using kernel pkey API */
+int keyring_key_query(key_serial_t key_serial, unsigned int *key_size,
+                      unsigned int *supported_ops)
+{
+    struct keyctl_pkey_query result;
+    long ret;
+
+    memset(&result, 0, sizeof(result));
+
+    ret = keyctl_pkey_query(key_serial, NULL, &result);
+    if (ret < 0) {
+        keyring_error(0, KEYRING_ERR_OPERATION,
+                     "Failed to query key %d: %ld", key_serial, ret);
+        return 0;
+    }
+
+    if (key_size != NULL)
+        *key_size = result.key_size;
+    if (supported_ops != NULL)
+        *supported_ops = result.supported_ops;
+
     return 1;
 }
 
