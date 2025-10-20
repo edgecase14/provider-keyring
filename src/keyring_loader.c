@@ -4,13 +4,14 @@
  */
 
 
+#include "keyring_provider.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
 #include <limits.h>
 #include <keyutils.h>
-#include "keyring_provider.h"
+#include <openssl/evp.h>
 
 /*
  * Load a key from keyring using URI
@@ -66,23 +67,108 @@ void *keyring_load(void *provctx __attribute__((unused)), const char *uri, int e
 }
 
 /*
- * Store a key to keyring (not fully implemented)
- * This would be used for key generation/import
+ * Store a key to keyring
+ * Used for key generation/import via OSSL_STORE
  */
-int keyring_store(void *provctx __attribute__((unused)), const void *keydata __attribute__((unused)), const char *uri __attribute__((unused)))
+int keyring_store(void *provctx __attribute__((unused)), const void *keydata, const char *uri)
 {
-    /* TODO: Implement key storage to keyring
-     *
-     * This would involve:
-     * 1. Parse the URI to get description and target keyring
-     * 2. Extract key data from keydata
-     * 3. Convert to DER format
-     * 4. Use keyctl_instantiate() or add_key() to store in keyring
-     */
+    keyring_uri_t parsed_uri;
+    EVP_PKEY *pkey;
+    key_serial_t keyring_id;
+    key_serial_t new_key_id;
+    unsigned char *der = NULL;
+    int der_len;
+    unsigned char *p;
 
-    keyring_error(0, KEYRING_ERR_OPERATION,
-                 "Key storage not yet implemented");
-    return 0;
+    if (uri == NULL || keydata == NULL)
+        return 0;
+
+    /* Parse the URI to get description and target keyring */
+    if (!keyring_uri_parse(uri, &parsed_uri)) {
+        keyring_error(0, KEYRING_ERR_INVALID_URI,
+                     "Failed to parse keyring URI for store: %s", uri);
+        return 0;
+    }
+
+    /* Must have object (description) specified */
+    if (!parsed_uri.has_object) {
+        keyring_error(0, KEYRING_ERR_INVALID_URI,
+                     "URI must specify object (key description) for store");
+        keyring_uri_free(&parsed_uri);
+        return 0;
+    }
+
+    /* keydata is an EVP_PKEY from the generating provider */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-qual"
+    pkey = (EVP_PKEY *)keydata;  /* OpenSSL OSSL_STORE API requires const void* */
+#pragma GCC diagnostic pop
+    if (pkey == NULL) {
+        keyring_error(0, KEYRING_ERR_OPERATION,
+                     "Invalid key data for store");
+        keyring_uri_free(&parsed_uri);
+        return 0;
+    }
+
+    /* Convert to PKCS#8 PrivateKeyInfo DER format */
+    der_len = i2d_PrivateKey(pkey, NULL);
+    if (der_len <= 0) {
+        keyring_error(0, KEYRING_ERR_OPERATION,
+                     "Failed to get DER encoding length");
+        keyring_uri_free(&parsed_uri);
+        return 0;
+    }
+
+    der = keyring_malloc((size_t)der_len);
+    if (der == NULL) {
+        keyring_uri_free(&parsed_uri);
+        return 0;
+    }
+
+    p = der;
+    if (i2d_PrivateKey(pkey, (unsigned char **)&p) <= 0) {
+        keyring_error(0, KEYRING_ERR_OPERATION,
+                     "Failed to encode key to DER format");
+        keyring_free(der);
+        keyring_uri_free(&parsed_uri);
+        return 0;
+    }
+
+    /* Determine target keyring */
+    switch (parsed_uri.keyring) {
+    case KEYRING_SESSION:
+        keyring_id = KEY_SPEC_SESSION_KEYRING;
+        break;
+    case KEYRING_USER:
+        keyring_id = KEY_SPEC_USER_KEYRING;
+        break;
+    case KEYRING_PERSISTENT:
+#ifdef KEY_SPEC_PERSISTENT_KEYRING
+        keyring_id = KEY_SPEC_PERSISTENT_KEYRING;
+#else
+        keyring_id = KEY_SPEC_USER_KEYRING;
+#endif
+        break;
+    case KEYRING_SEARCH_ALL:
+    default:
+        keyring_id = KEY_SPEC_USER_KEYRING;
+        break;
+    }
+
+    /* Use add_key() to store in keyring */
+    new_key_id = add_key("asymmetric", parsed_uri.object, der, (size_t)der_len, keyring_id);
+    if (new_key_id < 0) {
+        keyring_error(0, KEYRING_ERR_OPERATION,
+                     "Failed to add key to keyring: %d", new_key_id);
+        keyring_clear_free(der, (size_t)der_len);
+        keyring_uri_free(&parsed_uri);
+        return 0;
+    }
+
+    /* Success */
+    keyring_clear_free(der, (size_t)der_len);
+    keyring_uri_free(&parsed_uri);
+    return 1;
 }
 
 /*

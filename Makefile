@@ -15,11 +15,25 @@ OPENSSL_LIBS = $(shell pkg-config --libs libcrypto)
 KEYUTILS_LIBS = -lkeyutils
 TROUSERS_LIBS = -ltspi
 
+# Check OpenSSL version (require 3.x or higher)
+OPENSSL_VERSION := $(shell pkg-config --modversion libcrypto 2>/dev/null)
+OPENSSL_MAJOR := $(shell echo $(OPENSSL_VERSION) | cut -d. -f1)
+
+ifeq ($(OPENSSL_MAJOR),)
+$(error OpenSSL not found. Install libssl-dev or openssl-devel package)
+endif
+
+ifneq ($(shell test $(OPENSSL_MAJOR) -ge 3; echo $$?),0)
+$(error OpenSSL 3.x or higher required. Found version $(OPENSSL_VERSION). This provider uses the OpenSSL 3.x provider API which is not available in OpenSSL 1.x)
+endif
+
+$(info Detected OpenSSL version: $(OPENSSL_VERSION))
+
 # Directories
 SRC_DIR = src
 INC_DIR = include
 TEST_DIR = tests
-TOOLS_DIR = tools
+UTILS_DIR = utils
 BUILD_DIR = build
 OBJ_DIR = $(BUILD_DIR)/obj
 LIB_DIR = $(BUILD_DIR)/lib
@@ -47,11 +61,15 @@ PROVIDER_OBJS = $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(PROVIDER_SRCS))
 TEST_SRCS = $(wildcard $(TEST_DIR)/*.c)
 TEST_BINS = $(patsubst $(TEST_DIR)/%.c,$(BIN_DIR)/%,$(TEST_SRCS))
 
+# Utility sources
+UTIL_SRCS = $(wildcard $(UTILS_DIR)/*.c)
+UTIL_BINS = $(patsubst $(UTILS_DIR)/%.c,$(BIN_DIR)/%,$(UTIL_SRCS))
+
 # Phony targets
-.PHONY: all clean install uninstall test help
+.PHONY: all clean install uninstall test utils help
 
 # Default target
-all: $(PROVIDER_LIB) tests
+all: $(PROVIDER_LIB) tests utils
 
 # Create directories
 $(OBJ_DIR) $(LIB_DIR) $(BIN_DIR):
@@ -74,6 +92,12 @@ $(BIN_DIR)/test_%: $(TEST_DIR)/test_%.c $(PROVIDER_OBJS) | $(BIN_DIR)
 	$(CC) $(CFLAGS) $(OPENSSL_CFLAGS) -I$(INC_DIR) -o $@ $< $(PROVIDER_OBJS) \
 		$(OPENSSL_LIBS) $(KEYUTILS_LIBS)
 
+# Build utilities
+utils: $(UTIL_BINS)
+
+$(BIN_DIR)/%: $(UTILS_DIR)/%.c | $(BIN_DIR)
+	$(CC) $(CFLAGS) $(OPENSSL_CFLAGS) -o $@ $< $(OPENSSL_LIBS) $(KEYUTILS_LIBS)
+
 # Run tests
 test: tests
 	@echo "Running test suite..."
@@ -89,12 +113,17 @@ ifeq ($(OPENSSL_MODULESDIR),)
 OPENSSL_MODULESDIR = /usr/lib/x86_64-linux-gnu/ossl-modules
 endif
 
-install: $(PROVIDER_LIB)
+install: $(PROVIDER_LIB) utils
 	install -d $(DESTDIR)$(OPENSSL_MODULESDIR)
 	install -m 755 $(PROVIDER_LIB) $(DESTDIR)$(OPENSSL_MODULESDIR)/
+	install -d $(DESTDIR)/usr/local/bin
+	install -m 755 $(UTIL_BINS) $(DESTDIR)/usr/local/bin/
 
 uninstall:
 	rm -f $(DESTDIR)$(OPENSSL_MODULESDIR)/$(PROVIDER_NAME).so
+	@for util in $(UTIL_BINS); do \
+		rm -f $(DESTDIR)/usr/local/bin/$$(basename $$util); \
+	done
 
 # Clean build artifacts
 clean:
@@ -104,11 +133,16 @@ clean:
 help:
 	@echo "OpenSSL Keyring Provider - Build System"
 	@echo ""
+	@echo "Requirements:"
+	@echo "  - OpenSSL 3.x or higher (detected: $(OPENSSL_VERSION))"
+	@echo "  - keyutils library"
+	@echo ""
 	@echo "Targets:"
-	@echo "  all        - Build provider library and tests (default)"
+	@echo "  all        - Build provider library, tests, and utilities (default)"
 	@echo "  tests      - Build test suite"
 	@echo "  test       - Run test suite"
-	@echo "  install    - Install provider"
+	@echo "  utils      - Build utility programs"
+	@echo "  install    - Install provider and utilities"
 	@echo "  uninstall  - Remove installed files"
 	@echo "  clean      - Remove build artifacts"
 	@echo "  help       - Show this help message"
