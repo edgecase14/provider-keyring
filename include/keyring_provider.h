@@ -27,6 +27,9 @@
 #define KEYRING_PROVIDER_VERSION_MINOR 1
 #define KEYRING_PROVIDER_VERSION_PATCH 0
 
+/* Shared constants */
+extern const char *const keyring_default_pad_mode;
+
 /* URI scheme */
 #define KEYRING_URI_SCHEME "keyring"
 #define KEYRING_URI_SCHEME_LEN 7
@@ -66,7 +69,6 @@ typedef struct {
 
     /* Query attributes */
     char *pin_source;                  /* PIN source URI */
-    char *module_path;                 /* TPM library path */
 
     /* Flags */
     int has_id;                        /* ID specified */
@@ -88,18 +90,15 @@ typedef struct {
 typedef struct {
     const OSSL_CORE_HANDLE *core_handle;
     OSSL_LIB_CTX *libctx;
-
-    /* TPM availability flag */
-    int tpm_available;
 } keyring_prov_ctx_t;
 
 /* Signature context */
 typedef struct {
     keyring_prov_ctx_t *provctx;       /* Provider context */
     keyring_key_ctx_t *key_ctx;
-    const char *mdname;                /* Digest algorithm name */
+    char *mdname;                      /* Digest algorithm name (owned, must free) */
     EVP_MD *md;                        /* Digest algorithm */
-    const char *pad_mode;              /* Padding mode */
+    char *pad_mode;                    /* Padding mode (owned, must free) */
     int saltlen;                       /* PSS salt length */
 } keyring_sig_ctx_t;
 
@@ -107,7 +106,7 @@ typedef struct {
 typedef struct {
     keyring_prov_ctx_t *provctx;       /* Provider context */
     keyring_key_ctx_t *key_ctx;
-    const char *pad_mode;              /* Padding mode */
+    char *pad_mode;                    /* Padding mode (owned, must free) */
     EVP_MD *oaep_md;                  /* OAEP digest */
     EVP_MD *mgf1_md;                  /* MGF1 digest */
     unsigned char *oaep_label;        /* OAEP label */
@@ -153,9 +152,7 @@ extern const OSSL_DISPATCH keyring_rsa_asym_cipher_functions[];
 /* keyring_store.c */
 extern const OSSL_DISPATCH keyring_store_functions[];
 
-/* keyring_tpm.c - kernel keyring crypto operations */
-int keyring_pkey_init(keyring_prov_ctx_t *ctx);
-void keyring_pkey_cleanup(keyring_prov_ctx_t *ctx);
+/* keyring_pkey.c - kernel keyring crypto operations */
 int keyring_pkey_sign(key_serial_t key_serial, const unsigned char *tbs,
                       size_t tbslen, unsigned char *sig, size_t *siglen,
                       const char *mdname, const char *pad_mode);
@@ -174,6 +171,7 @@ void keyring_free(void *ptr);
 void keyring_clear_free(void *ptr, size_t len);
 char *keyring_strdup(const char *s);
 void keyring_error(int lib, int reason, const char *fmt, ...);
+void keyring_info(const char *fmt, ...);
 int keyring_key_get_public(key_serial_t key_serial, unsigned char **data,
                           size_t *len);
 int keyring_key_query(key_serial_t key_serial, unsigned int *key_size,
@@ -182,5 +180,8 @@ char *keyring_key_get_description(key_serial_t key_serial);
 key_serial_t keyring_search_key(const char *description, keyring_type_t keyring_type);
 keyring_key_type_t keyring_parse_key_type(const char *type_str);
 keyring_type_t keyring_parse_keyring_type(const char *keyring_str);
+
+/* keyring_self_test.c */
+int keyring_self_test(void);
 
 #endif /* KEYRING_PROVIDER_H */

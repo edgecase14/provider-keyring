@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
+#include <limits.h>
 #include <openssl/core.h>
 #include <openssl/core_dispatch.h>
 #include <openssl/core_names.h>
@@ -62,12 +64,17 @@ static void *keyring_sig_newctx(void *provctx, const char *propq)
 {
     keyring_sig_ctx_t *ctx;
 
+    (void)propq; /* Property queries not used */
+
     ctx = keyring_zalloc(sizeof(*ctx));
     if (ctx == NULL)
         return NULL;
 
     ctx->provctx = (keyring_prov_ctx_t *)provctx;
-    ctx->pad_mode = "pkcs1";  /* Default padding */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-qual"
+    ctx->pad_mode = (char *)keyring_default_pad_mode;  /* Static constant, freed via pointer comparison */
+#pragma GCC diagnostic pop
     ctx->saltlen = -1;  /* Default salt length for PSS */
 
     return ctx;
@@ -86,10 +93,10 @@ static void keyring_sig_freectx(void *vctx)
         EVP_MD_free(ctx->md);
 
     /* Free dynamically allocated strings (mdname is always dynamically allocated if not NULL) */
-    keyring_free((void *)ctx->mdname);
-    /* pad_mode might be static "pkcs1" default or dynamically allocated */
-    if (ctx->pad_mode != NULL && strcmp(ctx->pad_mode, "pkcs1") != 0)
-        keyring_free((void *)ctx->pad_mode);
+    keyring_free(ctx->mdname);
+    /* pad_mode: only free if not pointing to static keyring_default_pad_mode constant */
+    if (ctx->pad_mode != NULL && ctx->pad_mode != keyring_default_pad_mode)
+        keyring_free(ctx->pad_mode);
 
     keyring_free(ctx);
 }
@@ -153,8 +160,18 @@ static int keyring_sig_sign(void *vctx, unsigned char *sig, size_t *siglen,
 
     /* If sig is NULL, caller is querying for signature size */
     if (sig == NULL) {
+        assert(key->key_size >= 0 && key->key_size <= INT_MAX); /* Key size in bits, always positive */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wsign-conversion"
         *siglen = (key->key_size + 7) / 8;  /* Return key size in bytes */
+#pragma GCC diagnostic pop
         return 1;
+    }
+
+    /* Check buffer size */
+    if (sigsize < (size_t)((key->key_size + 7) / 8)) {
+        /* Buffer too small */
+        return 0;
     }
 
     /* Use kernel keyring API - works for both software and TPM-backed keys */
@@ -195,7 +212,11 @@ static int keyring_sig_verify(void *vctx, const unsigned char *sig, size_t sigle
     if (key->evp_pkey == NULL) {
         /* Need to create EVP_PKEY from public key data */
         const unsigned char *p = key->public_key;
+        assert(key->public_key_len <= LONG_MAX); /* d2i_PUBKEY takes long, ensure safe conversion */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wsign-conversion"
         key->evp_pkey = d2i_PUBKEY(NULL, &p, key->public_key_len);
+#pragma GCC diagnostic pop
         if (key->evp_pkey == NULL)
             return 0;
     }
@@ -248,11 +269,13 @@ static int keyring_sig_digest_sign_init(void *vctx, const char *mdname, void *vk
     if (ctx == NULL)
         return 0;
 
-    ctx->mdname = mdname;
+    /* Free old mdname if exists and duplicate new one */
+    keyring_free(ctx->mdname);
+    ctx->mdname = mdname ? keyring_strdup(mdname) : NULL;
 
     /* Fetch the digest */
-    if (mdname != NULL && ctx->provctx != NULL) {
-        ctx->md = EVP_MD_fetch(ctx->provctx->libctx, mdname, NULL);
+    if (ctx->mdname != NULL && ctx->provctx != NULL) {
+        ctx->md = EVP_MD_fetch(ctx->provctx->libctx, ctx->mdname, NULL);
         if (ctx->md == NULL)
             return 0;
     }
@@ -263,6 +286,7 @@ static int keyring_sig_digest_sign_init(void *vctx, const char *mdname, void *vk
 static int keyring_sig_digest_sign_update(void *vctx, const unsigned char *data,
                                           size_t datalen)
 {
+    (void)vctx; (void)data; (void)datalen; /* Digest streaming not implemented */
     /* TODO: Implement digest streaming if needed */
     /* For now, we expect single-shot operations */
     return 0;
@@ -271,6 +295,7 @@ static int keyring_sig_digest_sign_update(void *vctx, const unsigned char *data,
 static int keyring_sig_digest_sign_final(void *vctx, unsigned char *sig, size_t *siglen,
                                          size_t sigsize)
 {
+    (void)vctx; (void)sig; (void)siglen; (void)sigsize; /* Digest streaming not implemented */
     /* TODO: Implement digest finalization if needed */
     return 0;
 }
@@ -284,11 +309,13 @@ static int keyring_sig_digest_verify_init(void *vctx, const char *mdname, void *
     if (ctx == NULL)
         return 0;
 
-    ctx->mdname = mdname;
+    /* Free old mdname if exists and duplicate new one */
+    keyring_free(ctx->mdname);
+    ctx->mdname = mdname ? keyring_strdup(mdname) : NULL;
 
     /* Fetch the digest */
-    if (mdname != NULL && ctx->provctx != NULL) {
-        ctx->md = EVP_MD_fetch(ctx->provctx->libctx, mdname, NULL);
+    if (ctx->mdname != NULL && ctx->provctx != NULL) {
+        ctx->md = EVP_MD_fetch(ctx->provctx->libctx, ctx->mdname, NULL);
         if (ctx->md == NULL)
             return 0;
     }
@@ -299,6 +326,7 @@ static int keyring_sig_digest_verify_init(void *vctx, const char *mdname, void *
 static int keyring_sig_digest_verify_update(void *vctx, const unsigned char *data,
                                             size_t datalen)
 {
+    (void)vctx; (void)data; (void)datalen; /* Digest streaming not implemented */
     /* TODO: Implement digest streaming if needed */
     return 0;
 }
@@ -306,6 +334,7 @@ static int keyring_sig_digest_verify_update(void *vctx, const unsigned char *dat
 static int keyring_sig_digest_verify_final(void *vctx, const unsigned char *sig,
                                            size_t siglen)
 {
+    (void)vctx; (void)sig; (void)siglen; /* Digest streaming not implemented */
     /* TODO: Implement digest finalization if needed */
     return 0;
 }
@@ -320,6 +349,7 @@ static const OSSL_PARAM keyring_sig_settable_ctx_param_types[] = {
 
 static const OSSL_PARAM *keyring_sig_settable_ctx_params(void *vctx, void *provctx)
 {
+    (void)vctx; (void)provctx; /* Static list, no context needed */
     return keyring_sig_settable_ctx_param_types;
 }
 
@@ -338,7 +368,7 @@ static int keyring_sig_set_ctx_params(void *vctx, const OSSL_PARAM params[])
             return 0;
 
         /* Free old mdname if it exists */
-        keyring_free((void *)ctx->mdname);
+        keyring_free(ctx->mdname);
         /* Duplicate the string so we own it */
         ctx->mdname = keyring_strdup(mdname);
         OPENSSL_free(mdname);
@@ -355,9 +385,9 @@ static int keyring_sig_set_ctx_params(void *vctx, const OSSL_PARAM params[])
         if (!OSSL_PARAM_get_utf8_string(p, &pad, 0))
             return 0;
 
-        /* Free old pad_mode if it's not the default static string */
-        if (ctx->pad_mode != NULL && strcmp(ctx->pad_mode, "pkcs1") != 0)
-            keyring_free((void *)ctx->pad_mode);
+        /* Free old pad_mode if it's not the default static constant */
+        if (ctx->pad_mode != NULL && ctx->pad_mode != keyring_default_pad_mode)
+            keyring_free(ctx->pad_mode);
         /* Duplicate the string so we own it */
         ctx->pad_mode = keyring_strdup(pad);
         OPENSSL_free(pad);
@@ -381,6 +411,7 @@ static const OSSL_PARAM keyring_sig_gettable_ctx_param_types[] = {
 
 static const OSSL_PARAM *keyring_sig_gettable_ctx_params(void *vctx, void *provctx)
 {
+    (void)vctx; (void)provctx; /* Static list, no context needed */
     return keyring_sig_gettable_ctx_param_types;
 }
 

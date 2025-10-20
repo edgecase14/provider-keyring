@@ -12,6 +12,9 @@
 #include <openssl/crypto.h>
 #include "keyring_provider.h"
 
+/* Shared constants */
+const char *const keyring_default_pad_mode = "pkcs1";
+
 /* Memory allocation wrappers using OpenSSL memory functions */
 void *keyring_malloc(size_t size)
 {
@@ -80,6 +83,19 @@ void keyring_error(int lib __attribute__((unused)), int reason __attribute__((un
     fprintf(stderr, "keyring error: %s\n", buf);
 
     /* TODO: Push to OpenSSL error stack when we have access to OSSL_FUNC_ERR_* */
+}
+
+/* Info logging */
+void keyring_info(const char *fmt, ...)
+{
+    va_list args;
+    char buf[256];
+
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+
+    fprintf(stderr, "keyring info: %s\n", buf);
 }
 
 /* Read public key from kernel keyring */
@@ -184,7 +200,7 @@ char *keyring_key_get_description(key_serial_t key_serial)
 key_serial_t keyring_search_key(const char *description, keyring_type_t keyring_type)
 {
     key_serial_t keyring;
-    key_serial_t key;
+    long result;
 
     /* Determine which keyring to search */
     switch (keyring_type) {
@@ -205,15 +221,15 @@ key_serial_t keyring_search_key(const char *description, keyring_type_t keyring_
     case KEYRING_SEARCH_ALL:
     default:
         /* Try user keyring first, then session */
-        key = keyctl_search(KEY_SPEC_USER_KEYRING, "asymmetric",
-                           description, 0);
-        if (key > 0)
-            return key;
+        result = keyctl_search(KEY_SPEC_USER_KEYRING, "asymmetric",
+                              description, 0);
+        if (result > 0)
+            return (key_serial_t)result;
 
-        key = keyctl_search(KEY_SPEC_SESSION_KEYRING, "asymmetric",
-                           description, 0);
-        if (key > 0)
-            return key;
+        result = keyctl_search(KEY_SPEC_SESSION_KEYRING, "asymmetric",
+                              description, 0);
+        if (result > 0)
+            return (key_serial_t)result;
 
         /* Try persistent keyring if available */
 #ifdef KEY_SPEC_PERSISTENT_KEYRING
@@ -226,14 +242,14 @@ key_serial_t keyring_search_key(const char *description, keyring_type_t keyring_
     }
 
     /* Search in specified keyring */
-    key = keyctl_search(keyring, "asymmetric", description, 0);
-    if (key < 0) {
+    result = keyctl_search(keyring, "asymmetric", description, 0);
+    if (result < 0) {
         keyring_error(0, KEYRING_ERR_KEY_NOT_FOUND,
                      "Key '%s' not found in keyring", description);
         return -1;
     }
 
-    return key;
+    return (key_serial_t)result;
 }
 
 /* Parse key type string */

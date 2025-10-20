@@ -46,7 +46,6 @@ This directory contains test scripts for TPM integration with the Linux kernel k
 - `trousers` package (tcsd daemon)
 - `tpm-tools` package
 - Linux kernel 4.7+ with CONFIG_TCG_TPM=y
-- Root privileges or CAP_SYS_ADMIN
 
 **Setup:**
 

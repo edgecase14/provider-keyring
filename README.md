@@ -40,7 +40,6 @@ keyring:path-attributes[?query-attributes]
 ### Query Attributes (ampersand-separated)
 
 - `pin-source=<uri>` - PIN/passphrase source for keyring operations
-- `module-path=<path>` - Explicit path to TPM library
 
 ### Example URIs
 
@@ -56,11 +55,10 @@ keyring:
 ## Building
 
 ```bash
-make                    # Build provider, tools, and tests
-make tools              # Build only key management tools
+make                    # Build provider and tests
 make tests              # Build only test suite
 make test               # Run test suite
-make install            # Install provider and tools
+make install            # Install provider
 make clean              # Clean build artifacts
 ```
 
@@ -70,9 +68,7 @@ make clean              # Clean build artifacts
 sudo make install
 ```
 
-This installs:
-- Provider library to OpenSSL modules directory
-- Key management tools to `/usr/local/bin/`
+This installs the provider library to the OpenSSL modules directory.
 
 ## Configuration
 
@@ -99,61 +95,54 @@ Or use environment variable:
 export OPENSSL_MODULES=/path/to/provider/lib
 ```
 
-## Key Management Tools
+## Key Management with keyctl
 
-### keygen - Generate RSA keys in keyring
+The provider uses keys stored in the Linux kernel keyring. Use standard `keyctl` and `openssl` commands to manage keys.
+
+### Generate and Add Keys to Keyring
 
 ```bash
-keygen -k <description> -b <bits> [-t] [-r <keyring>]
+# Generate an RSA key pair
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out private.pem
 
-Options:
-  -k <description>  Key description/label
-  -b <bits>         Key size (2048, 3072, 4096)
-  -t                Use TPM for key generation
-  -r <keyring>      Target keyring (session, user, persistent)
+# Extract public key in DER format
+openssl pkey -in private.pem -pubout -outform DER -out public.der
+
+# Add public key to user keyring
+keyctl padd asymmetric my-key-name @u < public.der
+
+# The key is now available via URI
+# keyring:object=my-key-name;type=private
 ```
 
-Example:
+### View Keys in Keyring
+
 ```bash
-keygen -k "my-server-key" -b 2048 -t
+# List all keyrings
+keyctl show
+
+# List user keyring contents
+keyctl show @u
+
+# Search for a specific key
+keyctl search @u asymmetric my-key-name
+
+# Display key details
+keyctl describe <key-id>
+
+# Read key data (public key)
+keyctl read <key-id>
 ```
 
-### keyimport - Import existing keys to keyring
+### Remove Keys from Keyring
 
 ```bash
-keyimport -i <file> -k <description> [-r <keyring>]
+# Find key ID
+KEY_ID=$(keyctl search @u asymmetric my-key-name)
 
-Options:
-  -i <file>         Input key file (PEM/DER)
-  -k <description>  Key description in keyring
-  -r <keyring>      Target keyring
-```
-
-Example:
-```bash
-keyimport -i server.key -k "imported-key"
-```
-
-### keyinfo - Display key information
-
-```bash
-keyinfo <uri>
-
-Examples:
-  keyinfo "keyring:object=my-key"
-  keyinfo "keyring:id=12345678"
-```
-
-### keyattest - TPM key attestation
-
-```bash
-keyattest <uri> [-o <output-file>]
-
-Options:
-  -o <output-file>  Write attestation data to file
-
-Example:
-  keyattest "keyring:object=my-tpm-key;backend=tpm1.2" -o attestation.bin
+# Revoke and unlink key
+keyctl revoke $KEY_ID
+keyctl unlink $KEY_ID @u
 ```
 
 ## Usage Examples
@@ -161,30 +150,34 @@ Example:
 ### Sign data with keyring key
 
 ```bash
-# Generate or import a key first
-keygen -k "signing-key" -b 2048 -t
+# Generate and add a key first (see above)
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out private.pem
+openssl pkey -in private.pem -pubout -outform DER | keyctl padd asymmetric signing-key @u
 
-# Sign data
-echo "data to sign" | openssl dgst -sha256 -sign "keyring:object=signing-key" \
-  -out signature.bin
+# Sign data using the provider
+echo "data to sign" > data.txt
+openssl dgst -sha256 -sign "keyring:object=signing-key;type=private" \
+  -out signature.bin data.txt
+
+# Extract public key for verification
+openssl pkey -in private.pem -pubout -out public.pem
 
 # Verify signature
-echo "data to sign" | openssl dgst -sha256 -verify <(openssl pkey -pubin \
-  -in <(keyinfo "keyring:object=signing-key" --export-public)) \
-  -signature signature.bin
+openssl dgst -sha256 -verify public.pem -signature signature.bin data.txt
 ```
 
-### Encrypt/Decrypt with keyring key
+### Decrypt data with keyring key
 
 ```bash
-# Encrypt data
-echo "secret data" | openssl pkeyutl -encrypt \
-  -pubin -in <(keyinfo "keyring:object=my-key" --export-public) \
-  -out encrypted.bin
+# Encrypt data with public key
+openssl pkey -in private.pem -pubout -out public.pem
+echo "secret data" > plaintext.txt
+openssl pkeyutl -encrypt -pubin -inkey public.pem \
+  -in plaintext.txt -out encrypted.bin
 
-# Decrypt data
-openssl pkeyutl -decrypt -in encrypted.bin \
-  -inkey "keyring:object=my-key"
+# Decrypt using keyring key via provider
+openssl pkeyutl -decrypt -inkey "keyring:object=signing-key;type=private" \
+  -in encrypted.bin -out decrypted.txt
 ```
 
 ### TLS with keyring keys
@@ -192,7 +185,7 @@ openssl pkeyutl -decrypt -in encrypted.bin \
 ```bash
 # Use keyring key in TLS server
 openssl s_server -cert server.crt \
-  -key "keyring:object=server-key;backend=tpm1.2" \
+  -key "keyring:object=server-key;type=private" \
   -accept 4433
 ```
 
@@ -207,22 +200,14 @@ provider-keyring/
 │   ├── keyring_rsa.c        # RSA keymgmt operations
 │   ├── keyring_signature.c  # Sign/verify operations
 │   ├── keyring_asym_cipher.c # Encrypt/decrypt operations
-│   ├── keyring_tpm.c        # TPM 1.2 detection & offload
+│   ├── keyring_pkey.c       # Kernel pkey operations
 │   └── util.c               # Utility functions
 ├── include/
 │   └── keyring_provider.h   # Internal headers
-├── tools/
-│   ├── keygen.c             # Key generation tool
-│   ├── keyimport.c          # Key import tool
-│   ├── keyinfo.c            # Key information tool
-│   └── keyattest.c          # TPM attestation tool
 └── tests/
-    ├── test_provider.c      # Provider tests
-    ├── test_uri.c           # URI parsing tests
-    ├── test_keygen.c        # Key generation tests
-    ├── test_sign.c          # Signature tests
-    ├── test_encrypt.c       # Encryption tests
-    └── test_tpm.c           # TPM tests
+    ├── test_basic.c          # Basic functionality tests
+    ├── test_uri_parser.c     # URI parsing tests
+    └── test_provider_load.c  # Provider loading tests
 ```
 
 ## TPM Support

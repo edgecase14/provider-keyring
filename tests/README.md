@@ -54,7 +54,6 @@ Complete end-to-end test of TPM 1.2 key generation and kernel keyring integratio
 - trousers package (tcsd daemon)
 - tpm-tools package
 - Linux kernel 4.7+ with CONFIG_TCG_TPM=y
-- Root privileges or CAP_SYS_ADMIN
 
 **Setup:**
 ```bash
@@ -277,10 +276,8 @@ sudo systemctl start tcsd
 - Check kernel modules: `lsmod | grep tpm`
 
 **"add_key: Permission denied"**
-```bash
-# Need root or CAP_SYS_ADMIN for keyring operations
-sudo -E bash
-```
+- Check keyring permissions with `keyctl show`
+- Ensure you have access to the target keyring
 
 **"keyctl_pkey_sign: Operation not supported"**
 - Kernel version < 4.7, or

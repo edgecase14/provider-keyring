@@ -17,6 +17,7 @@ static keyring_prov_ctx_t *provider_ctx = NULL;
 /* Provider initialization */
 static OSSL_FUNC_provider_gettable_params_fn keyring_gettable_params;
 static OSSL_FUNC_provider_teardown_fn keyring_teardown;
+static OSSL_FUNC_provider_self_test_fn keyring_provider_self_test;
 
 /* Algorithm dispatch tables */
 static const OSSL_ALGORITHM keyring_keymgmt[] = {
@@ -101,6 +102,9 @@ const OSSL_ALGORITHM *keyring_query_operation(void *provctx __attribute__((unuse
 }
 
 /* Error reason strings */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdiscarded-qualifiers"
+/* OSSL_ITEM.ptr is void* but stores const string literals - OpenSSL API limitation */
 static const OSSL_ITEM reason_strings[] = {
     {KEYRING_ERR_INVALID_URI, "Invalid keyring URI"},
     {KEYRING_ERR_KEY_NOT_FOUND, "Key not found in keyring"},
@@ -109,6 +113,7 @@ static const OSSL_ITEM reason_strings[] = {
     {KEYRING_ERR_OPERATION, "Keyring operation failed"},
     {0, NULL}
 };
+#pragma GCC diagnostic pop
 
 const OSSL_ITEM *keyring_get_reason_strings(void *provctx __attribute__((unused)))
 {
@@ -122,9 +127,14 @@ static void keyring_teardown(void *provctx)
     if (ctx == NULL)
         return;
 
-    keyring_pkey_cleanup(ctx);
     keyring_free(ctx);
     provider_ctx = NULL;
+}
+
+/* Provider self-test wrapper */
+static int keyring_provider_self_test(void *provctx __attribute__((unused)))
+{
+    return keyring_self_test();
 }
 
 /* Provider entry point */
@@ -138,6 +148,7 @@ int OSSL_provider_init(const OSSL_CORE_HANDLE *handle,
         { OSSL_FUNC_PROVIDER_GET_PARAMS, (void (*)(void))keyring_get_params },
         { OSSL_FUNC_PROVIDER_QUERY_OPERATION, (void (*)(void))keyring_query_operation },
         { OSSL_FUNC_PROVIDER_GET_REASON_STRINGS, (void (*)(void))keyring_get_reason_strings },
+        { OSSL_FUNC_PROVIDER_SELF_TEST, (void (*)(void))keyring_provider_self_test },
         { OSSL_FUNC_PROVIDER_TEARDOWN, (void (*)(void))keyring_teardown },
         { 0, NULL }
     };
@@ -170,12 +181,10 @@ int OSSL_provider_init(const OSSL_CORE_HANDLE *handle,
 
     ctx->libctx = libctx;
 
-    /* Initialize kernel keyring crypto support */
-    if (keyring_pkey_init(ctx) == 0) {
-        /* Keyring crypto not available, but continue anyway */
-        ctx->tpm_available = 0;
-    } else {
-        ctx->tpm_available = 1;
+    /* Run self-test to check kernel keyring capabilities */
+    if (!keyring_self_test()) {
+        keyring_free(ctx);
+        return 0;
     }
 
     *provctx = ctx;

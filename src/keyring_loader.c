@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
+#include <limits.h>
 #include <keyutils.h>
 #include "keyring_provider.h"
 
@@ -158,7 +160,25 @@ int keyring_enumerate(void *provctx __attribute__((unused)), const char *uri,
 
     /* Parse key list (array of key_serial_t) */
     key_list = (int *)buffer;
-    num_keys = ret / sizeof(key_serial_t);
+    /* ret is guaranteed positive here (checked above), but verify for safety */
+    if (ret < 0) {
+        keyring_error(0, KEYRING_ERR_OPERATION,
+                     "Unexpected negative return from keyctl_read: %ld", ret);
+        keyring_free(buffer);
+        return 0;
+    }
+    if ((size_t)ret % sizeof(key_serial_t) != 0) {
+        keyring_error(0, KEYRING_ERR_OPERATION,
+                     "Invalid keyring data size: %ld bytes not multiple of %zu",
+                     ret, sizeof(key_serial_t));
+        keyring_free(buffer);
+        return 0;
+    }
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wsign-conversion"
+#pragma GCC diagnostic ignored "-Wconversion"
+    num_keys = (int)(ret / sizeof(key_serial_t));
+#pragma GCC diagnostic pop
 
     /* Iterate through keys and call callback */
     for (i = 0; i < num_keys; i++) {

@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
+#include <limits.h>
 #include <openssl/rsa.h>
 #include <openssl/bn.h>
 #include <openssl/evp.h>
@@ -107,7 +109,11 @@ int keyring_key_load_by_id(key_serial_t id, keyring_key_ctx_t *ctx)
     if (keyring_key_get_public(id, &pubkey_data, &pubkey_len)) {
         /* Successfully read public key - parse it */
         const unsigned char *p = pubkey_data;
+        assert(pubkey_len <= LONG_MAX); /* d2i_PUBKEY takes long, ensure safe conversion */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wsign-conversion"
         EVP_PKEY *pkey = d2i_PUBKEY(NULL, &p, pubkey_len);
+#pragma GCC diagnostic pop
         if (pkey != NULL) {
             ctx->key_size = EVP_PKEY_bits(pkey);
             /* Cache EVP_PKEY for public key operations (verify, encrypt) */
@@ -230,7 +236,7 @@ static int keyring_rsa_import(void *keydata, int selection __attribute__((unused
     const OSSL_PARAM *p;
 
     if (ctx == NULL || params == NULL) {
-        fprintf(stderr, "DEBUG: import failed - ctx=%p params=%p\n", ctx, params);
+        fprintf(stderr, "DEBUG: import failed - ctx=%p params=%p\n", (void *)ctx, (const void *)params);
         return 0;
     }
 
@@ -311,15 +317,22 @@ static int keyring_rsa_import(void *keydata, int selection __attribute__((unused
 static void *keyring_rsa_load(const void *reference, size_t reference_sz)
 {
     keyring_key_ctx_t *new_ctx = NULL;
-    keyring_key_ctx_t *src_key = NULL;
+    const keyring_key_ctx_t *src_key = NULL;
 
     if (reference == NULL) {
         fprintf(stderr, "DEBUG: load failed - reference is NULL\n");
         return NULL;
     }
 
-    /* The reference IS the pointer to our key context */
-    src_key = (keyring_key_ctx_t *)reference;
+    /* Validate reference size */
+    if (reference_sz != sizeof(keyring_key_ctx_t *)) {
+        fprintf(stderr, "DEBUG: load failed - invalid reference size %zu, expected %zu\n",
+                reference_sz, sizeof(keyring_key_ctx_t *));
+        return NULL;
+    }
+
+    /* The reference IS the pointer to our key context (read-only) */
+    src_key = (const keyring_key_ctx_t *)reference;
 
     if (src_key->key_serial < 0) {
         fprintf(stderr, "DEBUG: load failed - invalid source key, serial=%d\n", src_key->key_serial);
@@ -388,12 +401,21 @@ static int keyring_rsa_export(void *keydata, int selection,
         if (EVP_PKEY_get_bn_param(ctx->evp_pkey, OSSL_PKEY_PARAM_RSA_N, &n) &&
             EVP_PKEY_get_bn_param(ctx->evp_pkey, OSSL_PKEY_PARAM_RSA_E, &e)) {
 
-            if (n != NULL)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wsign-conversion"
+            if (n != NULL) {
+                int n_bytes = BN_num_bytes(n);
+                assert(n_bytes >= 0 && n_bytes <= INT_MAX); /* BN_num_bytes returns int, always positive */
                 params[i++] = OSSL_PARAM_construct_BN(OSSL_PKEY_PARAM_RSA_N,
-                                                      (unsigned char *)n, BN_num_bytes(n));
-            if (e != NULL)
+                                                      (unsigned char *)n, (size_t)n_bytes);
+            }
+            if (e != NULL) {
+                int e_bytes = BN_num_bytes(e);
+                assert(e_bytes >= 0 && e_bytes <= INT_MAX); /* BN_num_bytes returns int, always positive */
                 params[i++] = OSSL_PARAM_construct_BN(OSSL_PKEY_PARAM_RSA_E,
-                                                      (unsigned char *)e, BN_num_bytes(e));
+                                                      (unsigned char *)e, (size_t)e_bytes);
+            }
+#pragma GCC diagnostic pop
         }
     }
 

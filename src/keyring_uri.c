@@ -5,7 +5,7 @@
  * URI Format: keyring:path-attributes[?query-attributes]
  *
  * Path Attributes (semicolon-separated):
- *   id=<decimal-serial>    - Keyring serial ID (decimal)
+ *   id=<hex-serial>        - Keyring serial ID (hexadecimal)
  *   object=<description>   - Key description/label
  *   type=<key-type>        - Key type (private, public, cert)
  *   keyring=<name>         - Target keyring (session, user, persistent)
@@ -13,7 +13,6 @@
  *
  * Query Attributes (ampersand-separated):
  *   pin-source=<uri>       - PIN source URI
- *   module-path=<path>     - TPM library path
  */
 
 
@@ -21,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <assert.h>
 #include "keyring_provider.h"
 
 /* Convert hex character to integer */
@@ -80,11 +80,11 @@ static int parse_attribute(keyring_uri_t *uri, const char *key, const char *valu
     char *decoded_value;
 
     if (strcmp(key, "id") == 0) {
-        /* Parse decimal serial ID */
+        /* Parse hexadecimal serial ID */
         char *endptr;
         long long id_val;
 
-        id_val = strtoll(value, &endptr, 10);
+        id_val = strtoll(value, &endptr, 16);
         if (*endptr != '\0' || id_val < 0) {
             keyring_error(0, KEYRING_ERR_INVALID_URI,
                          "Invalid keyring serial ID: %s", value);
@@ -134,12 +134,6 @@ static int parse_attribute(keyring_uri_t *uri, const char *key, const char *valu
     if (strcmp(key, "pin-source") == 0) {
         keyring_free(uri->pin_source);
         uri->pin_source = decoded_value;
-        return 1;
-    }
-
-    if (strcmp(key, "module-path") == 0) {
-        keyring_free(uri->module_path);
-        uri->module_path = decoded_value;
         return 1;
     }
 
@@ -202,7 +196,6 @@ void keyring_uri_free(keyring_uri_t *uri)
 
     keyring_free(uri->object);
     keyring_free(uri->pin_source);
-    keyring_free(uri->module_path);
     keyring_uri_init(uri);
 }
 
@@ -245,7 +238,12 @@ int keyring_uri_parse(const char *uri_str, keyring_uri_t *parsed)
 
     /* Parse path attributes (semicolon-separated) */
     if (query_start != NULL) {
-        size_t path_len = query_start - path_start;
+        ptrdiff_t ptr_diff = query_start - path_start;
+        assert(ptr_diff >= 0); /* query_start comes after path_start */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wsign-conversion"
+        size_t path_len = (size_t)ptr_diff;
+#pragma GCC diagnostic pop
         path_copy = keyring_malloc(path_len + 1);
         if (path_copy == NULL)
             goto cleanup;

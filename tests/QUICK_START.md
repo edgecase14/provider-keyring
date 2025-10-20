@@ -212,10 +212,8 @@ sudo systemctl restart tcsd
 ```
 
 **"add_key: Permission denied"**
-```bash
-# Need root or CAP_SYS_ADMIN for keyring operations
-sudo -E bash  # Run commands as root
-```
+- Check keyring permissions with `keyctl show`
+- Ensure you have access to the target keyring
 
 **"keyctl: Package not found"**
 ```bash

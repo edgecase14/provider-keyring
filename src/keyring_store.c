@@ -84,12 +84,14 @@ static void *keyring_store_open(void *provctx, const char *uri)
 /* Attach to existing BIO - not supported */
 static void *keyring_store_attach(void *provctx, OSSL_CORE_BIO *bio)
 {
+    (void)provctx; (void)bio; /* Attach not supported for keyring URIs */
     return NULL;
 }
 
 /* Settable context parameters */
 static const OSSL_PARAM *keyring_store_settable_ctx_params(void *provctx)
 {
+    (void)provctx; /* Static list, no context needed */
     static const OSSL_PARAM params[] = {
         OSSL_PARAM_END
     };
@@ -99,6 +101,7 @@ static const OSSL_PARAM *keyring_store_settable_ctx_params(void *provctx)
 /* Set context parameters */
 static int keyring_store_set_ctx_params(void *loaderctx, const OSSL_PARAM params[])
 {
+    (void)loaderctx; (void)params; /* No parameters supported */
     return 1;
 }
 
@@ -114,8 +117,9 @@ static int keyring_store_load(void *loaderctx, OSSL_CALLBACK *object_cb,
     int object_type;
     const char *data_type = "RSA";
     const char *desc = "Keyring key";
-    const char *properties = "provider=keyring";
     int param_idx = 0;
+
+    (void)pw_cb; (void)pw_cbarg; /* Passphrase not needed for keyring keys */
 
     if (ctx == NULL || ctx->loaded || ctx->eof) {
         fprintf(stderr, "DEBUG: Invalid context or already loaded\n");
@@ -172,10 +176,14 @@ static int keyring_store_load(void *loaderctx, OSSL_CALLBACK *object_cb,
 
     /* Build parameter array for object callback */
     params[param_idx++] = OSSL_PARAM_construct_int(OSSL_OBJECT_PARAM_TYPE, &object_type);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-qual"
+    /* OSSL_PARAM_construct_utf8_string requires char* but we have const char* - OpenSSL API limitation */
     params[param_idx++] = OSSL_PARAM_construct_utf8_string(OSSL_OBJECT_PARAM_DATA_TYPE,
                                                            (char *)data_type, 0);
     params[param_idx++] = OSSL_PARAM_construct_utf8_string(OSSL_OBJECT_PARAM_DESC,
                                                            (char *)desc, 0);
+#pragma GCC diagnostic pop
 
     /* Pass address of ctx->key (stable memory, not stack) */
     params[param_idx++] = OSSL_PARAM_construct_octet_ptr(OSSL_OBJECT_PARAM_REFERENCE,

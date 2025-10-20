@@ -1,10 +1,11 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * OpenSSL Keyring Provider - TPM Support
+ * OpenSSL Keyring Provider - Kernel Keyring Pkey Operations
  *
- * This module handles TPM key detection and kernel keyring hardware-offloaded operations.
- * All TPM operations are performed through the Linux kernel's asymmetric key interface,
- * which provides unified access to both software and TPM-backed keys.
+ * This module handles cryptographic operations via the Linux kernel's keyctl_pkey_*
+ * functions. These kernel functions automatically route operations to hardware
+ * (TPM, secure elements) when keys are backed by trusted keyrings, or use software
+ * implementations otherwise.
  */
 
 
@@ -12,37 +13,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include "keyring_provider.h"
-
-/* Initialize kernel keyring crypto support */
-int keyring_pkey_init(keyring_prov_ctx_t *ctx)
-{
-    if (ctx == NULL)
-        return 0;
-
-    /*
-     * No initialization needed - the Linux kernel keyring handles
-     * all crypto operations (both software and TPM-backed) through
-     * the asymmetric key type.
-     */
-    ctx->tpm_available = 1;
-
-    return 1;
-}
-
-/* Cleanup kernel keyring crypto resources */
-void keyring_pkey_cleanup(keyring_prov_ctx_t *ctx)
-{
-    /*
-     * No cleanup needed - kernel keyring manages all resources.
-     */
-    if (ctx != NULL)
-        ctx->tpm_available = 0;
-}
-
-/*
- * Backend detection removed - kernel keyring handles both software
- * and TPM-backed keys transparently through the same API.
- */
 
 /* Perform signature operation via kernel keyring */
 int keyring_pkey_sign(key_serial_t key_serial, const unsigned char *tbs,

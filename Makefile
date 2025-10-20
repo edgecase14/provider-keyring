@@ -2,7 +2,10 @@
 
 # Build configuration
 CC = gcc
-CFLAGS = -Wall -Wextra -fPIC -O2 -g
+CFLAGS = -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wformat=2 -Wstrict-prototypes \
+         -Wmissing-prototypes -Wcast-qual -Wcast-align -Wwrite-strings -Wundef \
+         -Wredundant-decls -Wnull-dereference -Wdouble-promotion -Wformat-security \
+         -fPIC -O2 -g
 LDFLAGS = -shared
 VERSION_SCRIPT = libkeyring.map
 
@@ -24,8 +27,7 @@ BIN_DIR = $(BUILD_DIR)/bin
 
 # Provider library
 PROVIDER_NAME = keyring
-PROVIDER_LIB = $(LIB_DIR)/lib$(PROVIDER_NAME).so
-PROVIDER_MODULE = $(LIB_DIR)/$(PROVIDER_NAME).so
+PROVIDER_LIB = $(LIB_DIR)/$(PROVIDER_NAME).so
 
 # Source files
 PROVIDER_SRCS = $(SRC_DIR)/provider.c \
@@ -35,24 +37,21 @@ PROVIDER_SRCS = $(SRC_DIR)/provider.c \
                 $(SRC_DIR)/keyring_signature.c \
                 $(SRC_DIR)/keyring_asym_cipher.c \
                 $(SRC_DIR)/keyring_store.c \
-                $(SRC_DIR)/keyring_tpm.c \
+                $(SRC_DIR)/keyring_pkey.c \
+                $(SRC_DIR)/keyring_self_test.c \
                 $(SRC_DIR)/util.c
 
 PROVIDER_OBJS = $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(PROVIDER_SRCS))
-
-# Tool sources
-TOOL_SRCS = $(wildcard $(TOOLS_DIR)/*.c)
-TOOL_BINS = $(patsubst $(TOOLS_DIR)/%.c,$(BIN_DIR)/%,$(TOOL_SRCS))
 
 # Test sources
 TEST_SRCS = $(wildcard $(TEST_DIR)/*.c)
 TEST_BINS = $(patsubst $(TEST_DIR)/%.c,$(BIN_DIR)/%,$(TEST_SRCS))
 
 # Phony targets
-.PHONY: all clean install uninstall test tools help
+.PHONY: all clean install uninstall test help
 
 # Default target
-all: $(PROVIDER_LIB) tools tests
+all: $(PROVIDER_LIB) tests
 
 # Create directories
 $(OBJ_DIR) $(LIB_DIR) $(BIN_DIR):
@@ -61,26 +60,10 @@ $(OBJ_DIR) $(LIB_DIR) $(BIN_DIR):
 # Provider library
 $(PROVIDER_LIB): $(PROVIDER_OBJS) | $(LIB_DIR)
 	$(CC) $(LDFLAGS) -Wl,--version-script=$(VERSION_SCRIPT) -o $@ $^ $(OPENSSL_LIBS) $(KEYUTILS_LIBS)
-	ln -sf lib$(PROVIDER_NAME).so $(PROVIDER_MODULE)
 
 # Compile provider objects
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c | $(OBJ_DIR)
 	$(CC) $(CFLAGS) $(OPENSSL_CFLAGS) -I$(INC_DIR) -c -o $@ $<
-
-# Build tools
-# Note: Tools are built by compiling directly with provider sources,
-# not by linking to the shared library (which only exports OSSL_provider_init)
-tools: $(TOOL_BINS)
-
-# keyattest needs TrouSerS for TPM attestation operations
-$(BIN_DIR)/keyattest: $(TOOLS_DIR)/keyattest.c $(PROVIDER_OBJS) | $(BIN_DIR)
-	$(CC) $(CFLAGS) $(OPENSSL_CFLAGS) -I$(INC_DIR) -o $@ $< $(PROVIDER_OBJS) \
-		$(OPENSSL_LIBS) $(KEYUTILS_LIBS) $(TROUSERS_LIBS)
-
-# Other tools don't need TrouSerS
-$(BIN_DIR)/%: $(TOOLS_DIR)/%.c $(PROVIDER_OBJS) | $(BIN_DIR)
-	$(CC) $(CFLAGS) $(OPENSSL_CFLAGS) -I$(INC_DIR) -o $@ $< $(PROVIDER_OBJS) \
-		$(OPENSSL_LIBS) $(KEYUTILS_LIBS)
 
 # Build tests
 # Note: Tests are built by compiling directly with provider sources,
@@ -106,18 +89,12 @@ ifeq ($(OPENSSL_MODULESDIR),)
 OPENSSL_MODULESDIR = /usr/lib/x86_64-linux-gnu/ossl-modules
 endif
 
-install: $(PROVIDER_LIB) tools
+install: $(PROVIDER_LIB)
 	install -d $(DESTDIR)$(OPENSSL_MODULESDIR)
 	install -m 755 $(PROVIDER_LIB) $(DESTDIR)$(OPENSSL_MODULESDIR)/
-	install -d $(DESTDIR)/usr/local/bin
-	install -m 755 $(TOOL_BINS) $(DESTDIR)/usr/local/bin/
 
 uninstall:
-	rm -f $(DESTDIR)$(OPENSSL_MODULESDIR)/lib$(PROVIDER_NAME).so
-	rm -f $(DESTDIR)/usr/local/bin/keygen
-	rm -f $(DESTDIR)/usr/local/bin/keyimport
-	rm -f $(DESTDIR)/usr/local/bin/keyattest
-	rm -f $(DESTDIR)/usr/local/bin/keyinfo
+	rm -f $(DESTDIR)$(OPENSSL_MODULESDIR)/$(PROVIDER_NAME).so
 
 # Clean build artifacts
 clean:
@@ -128,11 +105,10 @@ help:
 	@echo "OpenSSL Keyring Provider - Build System"
 	@echo ""
 	@echo "Targets:"
-	@echo "  all        - Build provider library, tools, and tests (default)"
-	@echo "  tools      - Build key management tools"
+	@echo "  all        - Build provider library and tests (default)"
 	@echo "  tests      - Build test suite"
 	@echo "  test       - Run test suite"
-	@echo "  install    - Install provider and tools"
+	@echo "  install    - Install provider"
 	@echo "  uninstall  - Remove installed files"
 	@echo "  clean      - Remove build artifacts"
 	@echo "  help       - Show this help message"

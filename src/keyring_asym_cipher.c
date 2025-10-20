@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
+#include <limits.h>
 #include <openssl/core.h>
 #include <openssl/core_dispatch.h>
 #include <openssl/core_names.h>
@@ -55,7 +57,10 @@ static void *keyring_cipher_newctx(void *provctx)
         return NULL;
 
     ctx->provctx = (keyring_prov_ctx_t *)provctx;
-    ctx->pad_mode = "pkcs1";  /* Default padding */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-qual"
+    ctx->pad_mode = (char *)keyring_default_pad_mode;  /* Static constant, freed via pointer comparison */
+#pragma GCC diagnostic pop
 
     return ctx;
 }
@@ -77,9 +82,9 @@ static void keyring_cipher_freectx(void *vctx)
 
     keyring_free(ctx->oaep_label);
 
-    /* Free pad_mode if it's dynamically allocated (not the default static "pkcs1") */
-    if (ctx->pad_mode != NULL && strcmp(ctx->pad_mode, "pkcs1") != 0)
-        keyring_free((void *)ctx->pad_mode);
+    /* Free pad_mode if it's dynamically allocated (not pointing to static keyring_default_pad_mode) */
+    if (ctx->pad_mode != NULL && ctx->pad_mode != keyring_default_pad_mode)
+        keyring_free(ctx->pad_mode);
 
     keyring_free(ctx);
 }
@@ -155,7 +160,11 @@ static int keyring_cipher_encrypt(void *vctx, unsigned char *out, size_t *outlen
 
     /* If out is NULL, caller is querying for output size */
     if (out == NULL) {
+        assert(key->key_size >= 0 && key->key_size <= INT_MAX); /* Key size in bits, always positive */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wsign-conversion"
         *outlen = (key->key_size + 7) / 8;  /* Return key size in bytes */
+#pragma GCC diagnostic pop
         return 1;
     }
 
@@ -200,7 +209,11 @@ static int keyring_cipher_decrypt(void *vctx, unsigned char *out, size_t *outlen
 
     /* If out is NULL, caller is querying for output size */
     if (out == NULL) {
+        assert(key->key_size >= 0 && key->key_size <= INT_MAX); /* Key size in bits, always positive */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wsign-conversion"
         *outlen = (key->key_size + 7) / 8;  /* Return key size in bytes */
+#pragma GCC diagnostic pop
         return 1;
     }
 
@@ -226,6 +239,7 @@ static const OSSL_PARAM keyring_cipher_settable_ctx_param_types[] = {
 
 static const OSSL_PARAM *keyring_cipher_settable_ctx_params(void *vctx, void *provctx)
 {
+    (void)vctx; (void)provctx; /* Static list, no context needed */
     return keyring_cipher_settable_ctx_param_types;
 }
 
@@ -243,9 +257,9 @@ static int keyring_cipher_set_ctx_params(void *vctx, const OSSL_PARAM params[])
         if (!OSSL_PARAM_get_utf8_string(p, &pad, 0))
             return 0;
 
-        /* Free old pad_mode if it's not the default static string */
-        if (ctx->pad_mode != NULL && strcmp(ctx->pad_mode, "pkcs1") != 0)
-            keyring_free((void *)ctx->pad_mode);
+        /* Free old pad_mode if it's not the default static constant */
+        if (ctx->pad_mode != NULL && ctx->pad_mode != keyring_default_pad_mode)
+            keyring_free(ctx->pad_mode);
         /* Duplicate the string so we own it */
         ctx->pad_mode = keyring_strdup(pad);
         OPENSSL_free(pad);
@@ -302,6 +316,7 @@ static const OSSL_PARAM keyring_cipher_gettable_ctx_param_types[] = {
 
 static const OSSL_PARAM *keyring_cipher_gettable_ctx_params(void *vctx, void *provctx)
 {
+    (void)vctx; (void)provctx; /* Static list, no context needed */
     return keyring_cipher_gettable_ctx_param_types;
 }
 
