@@ -133,7 +133,7 @@ int keyring_key_query(key_serial_t key_serial, unsigned int *key_size,
 
     memset(&result, 0, sizeof(result));
 
-    ret = keyctl_pkey_query(key_serial, NULL, &result);
+    ret = keyctl_pkey_query(key_serial, "", &result);
     if (ret < 0) {
         keyring_error(0, KEYRING_ERR_OPERATION,
                      "Failed to query key %d: %ld", key_serial, ret);

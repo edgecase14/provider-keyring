@@ -22,6 +22,7 @@ static OSSL_FUNC_keymgmt_import_fn keyring_rsa_import;
 static OSSL_FUNC_keymgmt_import_types_fn keyring_rsa_import_types;
 static OSSL_FUNC_keymgmt_export_fn keyring_rsa_export;
 static OSSL_FUNC_keymgmt_export_types_fn keyring_rsa_export_types;
+static OSSL_FUNC_keymgmt_load_fn keyring_rsa_load;
 static OSSL_FUNC_keymgmt_get_params_fn keyring_rsa_get_params;
 static OSSL_FUNC_keymgmt_gettable_params_fn keyring_rsa_gettable_params;
 static OSSL_FUNC_keymgmt_query_operation_name_fn keyring_rsa_query_operation_name;
@@ -36,6 +37,7 @@ const OSSL_DISPATCH keyring_rsa_keymgmt_functions[] = {
     { OSSL_FUNC_KEYMGMT_IMPORT_TYPES, (void (*)(void))keyring_rsa_import_types },
     { OSSL_FUNC_KEYMGMT_EXPORT, (void (*)(void))keyring_rsa_export },
     { OSSL_FUNC_KEYMGMT_EXPORT_TYPES, (void (*)(void))keyring_rsa_export_types },
+    { OSSL_FUNC_KEYMGMT_LOAD, (void (*)(void))keyring_rsa_load },
     { OSSL_FUNC_KEYMGMT_GET_PARAMS, (void (*)(void))keyring_rsa_get_params },
     { OSSL_FUNC_KEYMGMT_GETTABLE_PARAMS, (void (*)(void))keyring_rsa_gettable_params },
     { OSSL_FUNC_KEYMGMT_QUERY_OPERATION_NAME, (void (*)(void))keyring_rsa_query_operation_name },
@@ -158,7 +160,9 @@ int keyring_key_load_by_description(const char *desc, keyring_type_t keyring_typ
 
 static void *keyring_rsa_new(void *provctx __attribute__((unused)))
 {
-    return keyring_key_new();
+    void *ctx = keyring_key_new();
+    fprintf(stderr, "DEBUG: keyring_rsa_new called, returning %p\n", ctx);
+    return ctx;
 }
 
 static void keyring_rsa_free(void *keydata)
@@ -169,24 +173,35 @@ static void keyring_rsa_free(void *keydata)
 static int keyring_rsa_has(const void *keydata, int selection)
 {
     const keyring_key_ctx_t *ctx = keydata;
+    int result;
 
-    if (ctx == NULL || ctx->key_serial < 0)
+    fprintf(stderr, "DEBUG: keyring_rsa_has called, ctx=%p, selection=0x%x\n", keydata, selection);
+
+    if (ctx == NULL || ctx->key_serial < 0) {
+        fprintf(stderr, "DEBUG: keyring_rsa_has returning 0 (ctx=%p, serial=%d)\n",
+                ctx, ctx ? ctx->key_serial : -999);
         return 0;
+    }
 
     if ((selection & OSSL_KEYMGMT_SELECT_PUBLIC_KEY) != 0) {
-        return ctx->public_key != NULL;
+        result = ctx->public_key != NULL;
+        fprintf(stderr, "DEBUG: keyring_rsa_has PUBLIC_KEY check, returning %d\n", result);
+        return result;
     }
 
     if ((selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY) != 0) {
         /* We have a private key reference in the keyring */
+        fprintf(stderr, "DEBUG: keyring_rsa_has PRIVATE_KEY check, returning 1\n");
         return 1;
     }
 
     if ((selection & OSSL_KEYMGMT_SELECT_DOMAIN_PARAMETERS) != 0) {
         /* RSA doesn't have domain parameters */
+        fprintf(stderr, "DEBUG: keyring_rsa_has DOMAIN_PARAMETERS check, returning 0\n");
         return 0;
     }
 
+    fprintf(stderr, "DEBUG: keyring_rsa_has no match, returning 0\n");
     return 0;
 }
 
@@ -215,6 +230,7 @@ static int keyring_rsa_match(const void *keydata1, const void *keydata2,
 static const OSSL_PARAM *keyring_rsa_import_types(int selection __attribute__((unused)))
 {
     static const OSSL_PARAM import_types[] = {
+        OSSL_PARAM_octet_ptr(OSSL_OBJECT_PARAM_REFERENCE, NULL, 0),  /* Key reference */
         OSSL_PARAM_octet_string("data", NULL, 0),  /* Generic data param */
         OSSL_PARAM_BN(OSSL_PKEY_PARAM_RSA_N, NULL, 0),
         OSSL_PARAM_BN(OSSL_PKEY_PARAM_RSA_E, NULL, 0),
@@ -227,13 +243,161 @@ static int keyring_rsa_import(void *keydata, int selection __attribute__((unused
                              const OSSL_PARAM params[])
 {
     keyring_key_ctx_t *ctx = keydata;
+    const OSSL_PARAM *p;
 
-    if (ctx == NULL || params == NULL)
+    fprintf(stderr, "DEBUG: keyring_rsa_import called, selection=0x%x\n", selection);
+
+    if (ctx == NULL || params == NULL) {
+        fprintf(stderr, "DEBUG: import failed - ctx=%p params=%p\n", ctx, params);
         return 0;
+    }
 
-    /* TODO: Import from parameters for key creation */
-    /* For now, keys are loaded via the loader interface */
+    /* Check if this is a reference to an already-loaded key */
+    p = OSSL_PARAM_locate_const(params, OSSL_OBJECT_PARAM_REFERENCE);
+    fprintf(stderr, "DEBUG: REFERENCE param lookup: p=%p\n", p);
+
+    if (p != NULL) {
+        fprintf(stderr, "DEBUG: REFERENCE found, data_type=%u (OCTET_PTR=%u)\n",
+                p->data_type, OSSL_PARAM_OCTET_PTR);
+    }
+
+    if (p != NULL && p->data_type == OSSL_PARAM_OCTET_PTR) {
+        /* This is a reference from STORE loader - just copy the key context */
+        keyring_key_ctx_t *src_key = NULL;
+        void **ptr = (void **)p->data;
+
+        fprintf(stderr, "DEBUG: ptr=%p, *ptr=%p\n", ptr, ptr ? *ptr : NULL);
+
+        if (ptr && *ptr) {
+            src_key = (keyring_key_ctx_t *)*ptr;
+            fprintf(stderr, "DEBUG: src_key=%p, serial=%d\n", src_key, src_key->key_serial);
+
+            /* Copy key information */
+            ctx->key_serial = src_key->key_serial;
+            ctx->key_size = src_key->key_size;
+
+            if (src_key->description) {
+                ctx->description = keyring_strdup(src_key->description);
+            }
+
+            if (src_key->public_key && src_key->public_key_len > 0) {
+                ctx->public_key = keyring_malloc(src_key->public_key_len);
+                if (ctx->public_key) {
+                    memcpy(ctx->public_key, src_key->public_key, src_key->public_key_len);
+                    ctx->public_key_len = src_key->public_key_len;
+                }
+            }
+
+            if (src_key->evp_pkey) {
+                ctx->evp_pkey = src_key->evp_pkey;
+                EVP_PKEY_up_ref(ctx->evp_pkey);
+            }
+
+            fprintf(stderr, "DEBUG: import SUCCESS - returning 1\n");
+            return 1;
+        }
+    }
+
+    /* Check for generic "data" parameter containing our key context */
+    p = OSSL_PARAM_locate_const(params, "data");
+    fprintf(stderr, "DEBUG: data param lookup: p=%p\n", p);
+
+    if (p != NULL && p->data_type == OSSL_PARAM_OCTET_STRING) {
+        fprintf(stderr, "DEBUG: data param found, size=%zu (expected %zu)\n",
+                p->data_size, sizeof(keyring_key_ctx_t));
+
+        if (p->data_size == sizeof(keyring_key_ctx_t)) {
+            /* Copy the key context structure */
+            keyring_key_ctx_t *src_key = (keyring_key_ctx_t *)p->data;
+
+            ctx->key_serial = src_key->key_serial;
+            ctx->key_size = src_key->key_size;
+
+            if (src_key->description) {
+                ctx->description = keyring_strdup(src_key->description);
+            }
+
+            if (src_key->public_key && src_key->public_key_len > 0) {
+                ctx->public_key = keyring_malloc(src_key->public_key_len);
+                if (ctx->public_key) {
+                    memcpy(ctx->public_key, src_key->public_key, src_key->public_key_len);
+                    ctx->public_key_len = src_key->public_key_len;
+                }
+            }
+
+            if (src_key->evp_pkey) {
+                ctx->evp_pkey = src_key->evp_pkey;
+                EVP_PKEY_up_ref(ctx->evp_pkey);
+            }
+
+            fprintf(stderr, "DEBUG: import SUCCESS via data param - returning 1\n");
+            return 1;
+        }
+    }
+
+    /* Standard RSA parameter import not implemented */
+    fprintf(stderr, "DEBUG: import FAILED - no valid params found, returning 0\n");
     return 0;
+}
+
+/* Load a key from a reference */
+static void *keyring_rsa_load(const void *reference, size_t reference_sz)
+{
+    keyring_key_ctx_t *new_ctx = NULL;
+    keyring_key_ctx_t *src_key = NULL;
+
+    fprintf(stderr, "DEBUG: keyring_rsa_load called, reference=%p, size=%zu\n",
+            reference, reference_sz);
+
+    if (reference == NULL) {
+        fprintf(stderr, "DEBUG: load failed - reference is NULL\n");
+        return NULL;
+    }
+
+    /* The reference IS the pointer to our key context */
+    src_key = (keyring_key_ctx_t *)reference;
+
+    fprintf(stderr, "DEBUG: load using src_key=%p\n", (void *)src_key);
+
+    if (src_key->key_serial < 0) {
+        fprintf(stderr, "DEBUG: load failed - invalid source key, serial=%d\n", src_key->key_serial);
+        return NULL;
+    }
+
+    fprintf(stderr, "DEBUG: load found source key: serial=%d\n", src_key->key_serial);
+
+    /* Create new key context */
+    new_ctx = keyring_key_new();
+    if (new_ctx == NULL) {
+        fprintf(stderr, "DEBUG: load failed - couldn't allocate new context\n");
+        return NULL;
+    }
+
+    /* Copy key information from source */
+    new_ctx->key_serial = src_key->key_serial;
+    new_ctx->key_size = src_key->key_size;
+
+    if (src_key->description) {
+        new_ctx->description = keyring_strdup(src_key->description);
+    }
+
+    if (src_key->public_key && src_key->public_key_len > 0) {
+        new_ctx->public_key = keyring_malloc(src_key->public_key_len);
+        if (new_ctx->public_key) {
+            memcpy(new_ctx->public_key, src_key->public_key, src_key->public_key_len);
+            new_ctx->public_key_len = src_key->public_key_len;
+        }
+    }
+
+    if (src_key->evp_pkey) {
+        new_ctx->evp_pkey = src_key->evp_pkey;
+        EVP_PKEY_up_ref(new_ctx->evp_pkey);
+    }
+
+    fprintf(stderr, "DEBUG: load SUCCESS - returning %p with serial=%d\n",
+            (void *)new_ctx, new_ctx->key_serial);
+
+    return new_ctx;
 }
 
 static const OSSL_PARAM *keyring_rsa_export_types(int selection __attribute__((unused)))

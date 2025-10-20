@@ -159,6 +159,9 @@ void keyring_pkey_cleanup(keyring_prov_ctx_t *ctx);
 int keyring_pkey_sign(key_serial_t key_serial, const unsigned char *tbs,
                       size_t tbslen, unsigned char *sig, size_t *siglen,
                       const char *mdname, const char *pad_mode);
+int keyring_pkey_encrypt(key_serial_t key_serial, const unsigned char *in,
+                        size_t inlen, unsigned char *out, size_t *outlen,
+                        const char *pad_mode);
 int keyring_pkey_decrypt(key_serial_t key_serial, const unsigned char *in,
                         size_t inlen, unsigned char *out, size_t *outlen,
                         const char *pad_mode);

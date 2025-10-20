@@ -141,81 +141,28 @@ static int keyring_cipher_encrypt(void *vctx, unsigned char *out, size_t *outlen
 {
     keyring_cipher_ctx_t *ctx = vctx;
     keyring_key_ctx_t *key;
-    EVP_PKEY_CTX *pkey_ctx;
-    int ret;
+    size_t buffer_size;
 
     if (ctx == NULL || ctx->key_ctx == NULL)
         return 0;
 
     key = ctx->key_ctx;
 
-    /* Encryption uses public key via OpenSSL */
-    if (key->evp_pkey == NULL) {
-        /* Create EVP_PKEY from public key data */
-        const unsigned char *p = key->public_key;
-        key->evp_pkey = d2i_PUBKEY(NULL, &p, key->public_key_len);
-        if (key->evp_pkey == NULL)
-            return 0;
+    /* If out is NULL, caller is querying for output size */
+    if (out == NULL) {
+        *outlen = (key->key_size + 7) / 8;  /* Return key size in bytes */
+        return 1;
     }
 
-    pkey_ctx = EVP_PKEY_CTX_new(key->evp_pkey, NULL);
-    if (pkey_ctx == NULL)
+    buffer_size = outsize;
+
+    /* Use kernel keyring API for encryption - works for both software and TPM-backed keys */
+    if (!keyring_pkey_encrypt(key->key_serial, in, inlen, out, &buffer_size,
+                              ctx->pad_mode))
         return 0;
 
-    if (EVP_PKEY_encrypt_init(pkey_ctx) <= 0) {
-        EVP_PKEY_CTX_free(pkey_ctx);
-        return 0;
-    }
-
-    /* Set padding mode */
-    if (strcmp(ctx->pad_mode, "oaep") == 0) {
-        if (EVP_PKEY_CTX_set_rsa_padding(pkey_ctx, RSA_PKCS1_OAEP_PADDING) <= 0) {
-            EVP_PKEY_CTX_free(pkey_ctx);
-            return 0;
-        }
-
-        /* Set OAEP digest */
-        if (ctx->oaep_md != NULL) {
-            if (EVP_PKEY_CTX_set_rsa_oaep_md(pkey_ctx, ctx->oaep_md) <= 0) {
-                EVP_PKEY_CTX_free(pkey_ctx);
-                return 0;
-            }
-        }
-
-        /* Set MGF1 digest */
-        if (ctx->mgf1_md != NULL) {
-            if (EVP_PKEY_CTX_set_rsa_mgf1_md(pkey_ctx, ctx->mgf1_md) <= 0) {
-                EVP_PKEY_CTX_free(pkey_ctx);
-                return 0;
-            }
-        }
-
-        /* Set OAEP label */
-        if (ctx->oaep_label != NULL && ctx->oaep_label_len > 0) {
-            /* EVP_PKEY_CTX takes ownership of the label */
-            unsigned char *label_copy = OPENSSL_memdup(ctx->oaep_label, ctx->oaep_label_len);
-            if (label_copy == NULL) {
-                EVP_PKEY_CTX_free(pkey_ctx);
-                return 0;
-            }
-            if (EVP_PKEY_CTX_set0_rsa_oaep_label(pkey_ctx, label_copy, ctx->oaep_label_len) <= 0) {
-                OPENSSL_free(label_copy);
-                EVP_PKEY_CTX_free(pkey_ctx);
-                return 0;
-            }
-        }
-    } else {
-        /* PKCS#1 v1.5 padding (default) */
-        if (EVP_PKEY_CTX_set_rsa_padding(pkey_ctx, RSA_PKCS1_PADDING) <= 0) {
-            EVP_PKEY_CTX_free(pkey_ctx);
-            return 0;
-        }
-    }
-
-    ret = EVP_PKEY_encrypt(pkey_ctx, out, outlen, in, inlen);
-    EVP_PKEY_CTX_free(pkey_ctx);
-
-    return ret > 0;
+    *outlen = buffer_size;
+    return 1;
 }
 
 /* Initialize decryption operation */
@@ -239,15 +186,28 @@ static int keyring_cipher_decrypt(void *vctx, unsigned char *out, size_t *outlen
 {
     keyring_cipher_ctx_t *ctx = vctx;
     keyring_key_ctx_t *key;
+    size_t buffer_size;
 
     if (ctx == NULL || ctx->key_ctx == NULL)
         return 0;
 
     key = ctx->key_ctx;
 
+    /* If out is NULL, caller is querying for output size */
+    if (out == NULL) {
+        *outlen = (key->key_size + 7) / 8;  /* Return key size in bytes */
+        return 1;
+    }
+
+    buffer_size = outsize;
+
     /* Use kernel keyring API - works for both software and TPM-backed keys */
-    return keyring_pkey_decrypt(key->key_serial, in, inlen, out, outlen,
-                               ctx->pad_mode);
+    if (!keyring_pkey_decrypt(key->key_serial, in, inlen, out, &buffer_size,
+                              ctx->pad_mode))
+        return 0;
+
+    *outlen = buffer_size;
+    return 1;
 }
 
 /* Parameter handling */

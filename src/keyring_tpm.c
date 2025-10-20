@@ -81,6 +81,57 @@ int keyring_pkey_sign(key_serial_t key_serial, const unsigned char *tbs,
     return 1;
 }
 
+/* Perform encryption operation via kernel keyring */
+int keyring_pkey_encrypt(key_serial_t key_serial, const unsigned char *in,
+                        size_t inlen, unsigned char *out, size_t *outlen,
+                        const char *pad_mode)
+{
+    /*
+     * Encryption through kernel keyring asymmetric key API.
+     *
+     * The Linux kernel's asymmetric key type provides a unified interface
+     * for both software and TPM-backed keys. The kernel automatically
+     * routes operations to the appropriate backend (TPM hardware or
+     * software) based on how the key was created.
+     */
+    struct keyctl_pkey_query result;
+    char info[128];
+    long ret;
+
+    /* Build info string */
+    if (pad_mode != NULL && strcmp(pad_mode, "oaep") == 0) {
+        snprintf(info, sizeof(info), "enc=oaep");
+    } else {
+        snprintf(info, sizeof(info), "enc=pkcs1");
+    }
+
+    /* Query key first to ensure kernel has necessary information */
+    if (keyctl_pkey_query(key_serial, info, &result) < 0) {
+        keyring_error(0, KEYRING_ERR_OPERATION,
+                     "Keyring query operation failed for encrypt");
+        return 0;
+    }
+
+    /* Verify output buffer is large enough */
+    if (*outlen < result.max_dec_size) {
+        keyring_error(0, KEYRING_ERR_OPERATION,
+                     "Output buffer too small for encryption: need %u, have %zu",
+                     result.max_dec_size, *outlen);
+        return 0;
+    }
+
+    /* Perform encryption via kernel keyring */
+    ret = keyctl_pkey_encrypt(key_serial, info, in, inlen, out, result.max_dec_size);
+    if (ret < 0) {
+        keyring_error(0, KEYRING_ERR_OPERATION,
+                     "Keyring encrypt operation failed: %ld", ret);
+        return 0;
+    }
+
+    *outlen = (size_t)ret;
+    return 1;
+}
+
 /* Perform decryption operation via kernel keyring */
 int keyring_pkey_decrypt(key_serial_t key_serial, const unsigned char *in,
                         size_t inlen, unsigned char *out, size_t *outlen,
@@ -94,6 +145,7 @@ int keyring_pkey_decrypt(key_serial_t key_serial, const unsigned char *in,
      * routes operations to the appropriate backend (TPM hardware or
      * software) based on how the key was created.
      */
+    struct keyctl_pkey_query result;
     char info[128];
     long ret;
 
@@ -104,8 +156,23 @@ int keyring_pkey_decrypt(key_serial_t key_serial, const unsigned char *in,
         snprintf(info, sizeof(info), "enc=pkcs1");
     }
 
+    /* Query key first to ensure kernel has necessary information */
+    if (keyctl_pkey_query(key_serial, info, &result) < 0) {
+        keyring_error(0, KEYRING_ERR_OPERATION,
+                     "Keyring query operation failed for decrypt");
+        return 0;
+    }
+
+    /* Verify output buffer is large enough */
+    if (*outlen < result.max_enc_size) {
+        keyring_error(0, KEYRING_ERR_OPERATION,
+                     "Output buffer too small for decryption: need %u, have %zu",
+                     result.max_enc_size, *outlen);
+        return 0;
+    }
+
     /* Perform decryption via kernel keyring */
-    ret = keyctl_pkey_decrypt(key_serial, info, in, inlen, out, *outlen);
+    ret = keyctl_pkey_decrypt(key_serial, info, in, inlen, out, result.max_enc_size);
     if (ret < 0) {
         keyring_error(0, KEYRING_ERR_OPERATION,
                      "Keyring decrypt operation failed: %ld", ret);
