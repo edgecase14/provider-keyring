@@ -53,12 +53,8 @@ static void *keyring_store_open(void *provctx, const char *uri)
     keyring_store_ctx_t *ctx;
     keyring_prov_ctx_t *pctx = provctx;
 
-    fprintf(stderr, "DEBUG: keyring_store_open called with URI: %s\n", uri ? uri : "(null)");
-
-    if (uri == NULL || strncmp(uri, "keyring:", 8) != 0) {
-        fprintf(stderr, "DEBUG: URI not recognized as keyring URI\n");
+    if (uri == NULL || strncmp(uri, "keyring:", 8) != 0)
         return NULL;
-    }
 
     ctx = keyring_zalloc(sizeof(*ctx));
     if (ctx == NULL)
@@ -79,7 +75,6 @@ static void *keyring_store_open(void *provctx, const char *uri)
         return NULL;
     }
 
-    fprintf(stderr, "DEBUG: STORE opened successfully\n");
     ctx->loaded = 0;
     ctx->eof = 0;
 
@@ -122,8 +117,6 @@ static int keyring_store_load(void *loaderctx, OSSL_CALLBACK *object_cb,
     const char *properties = "provider=keyring";
     int param_idx = 0;
 
-    fprintf(stderr, "DEBUG: keyring_store_load called\n");
-
     if (ctx == NULL || ctx->loaded || ctx->eof) {
         fprintf(stderr, "DEBUG: Invalid context or already loaded\n");
         return 0;
@@ -140,14 +133,12 @@ static int keyring_store_load(void *loaderctx, OSSL_CALLBACK *object_cb,
     if (ctx->parsed_uri.has_id) {
         /* Load by serial ID */
         key_serial = ctx->parsed_uri.id;
-        fprintf(stderr, "DEBUG: Loading key by ID: %d (0x%x)\n", key_serial, key_serial);
         if (!keyring_key_load_by_id(key_serial, key)) {
             fprintf(stderr, "DEBUG: Failed to load key by ID\n");
             goto err;
         }
     } else if (ctx->parsed_uri.has_object) {
         /* Load by description */
-        fprintf(stderr, "DEBUG: Loading key by description: %s\n", ctx->parsed_uri.object);
         if (!keyring_key_load_by_description(ctx->parsed_uri.object,
                                               ctx->parsed_uri.keyring, key)) {
             fprintf(stderr, "DEBUG: Failed to load key by description\n");
@@ -158,8 +149,6 @@ static int keyring_store_load(void *loaderctx, OSSL_CALLBACK *object_cb,
         fprintf(stderr, "DEBUG: No ID or object specified\n");
         goto err;
     }
-
-    fprintf(stderr, "DEBUG: Key loaded successfully, serial=%d\n", key->key_serial);
 
     /* Store key in ctx FIRST - we need a stable address, not a stack variable */
     ctx->key = key;
@@ -189,14 +178,9 @@ static int keyring_store_load(void *loaderctx, OSSL_CALLBACK *object_cb,
                                                            (char *)desc, 0);
 
     /* Pass address of ctx->key (stable memory, not stack) */
-    fprintf(stderr, "DEBUG: Passing stable key reference: &ctx->key=%p, ctx->key=%p, serial=%d\n",
-            (void *)&ctx->key, (void *)ctx->key, ctx->key->key_serial);
     params[param_idx++] = OSSL_PARAM_construct_octet_ptr(OSSL_OBJECT_PARAM_REFERENCE,
                                                          (void **)&ctx->key, 0);
     params[param_idx++] = OSSL_PARAM_construct_end();
-
-    fprintf(stderr, "DEBUG: Calling object callback with object_type=%d, param_count=%d\n",
-            object_type, param_idx);
 
     /* Call the object callback */
     if (!object_cb(params, object_cbarg)) {
@@ -204,14 +188,11 @@ static int keyring_store_load(void *loaderctx, OSSL_CALLBACK *object_cb,
         goto err;
     }
 
-    fprintf(stderr, "DEBUG: Object callback succeeded\n");
-
     /* Mark as loaded and EOF */
     ctx->loaded = 1;
     ctx->eof = 1;
     /* ctx->key already set earlier before callback */
 
-    fprintf(stderr, "DEBUG: keyring_store_load returning success\n");
     return 1;
 
 err:

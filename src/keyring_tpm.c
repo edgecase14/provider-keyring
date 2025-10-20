@@ -57,6 +57,7 @@ int keyring_pkey_sign(key_serial_t key_serial, const unsigned char *tbs,
      * routes operations to the appropriate backend (TPM hardware or
      * software) based on how the key was created.
      */
+    struct keyctl_pkey_query result;
     char info[128];
     long ret;
 
@@ -69,8 +70,24 @@ int keyring_pkey_sign(key_serial_t key_serial, const unsigned char *tbs,
                 mdname ? mdname : "sha256");
     }
 
+    /* Query key first to ensure kernel has necessary information */
+    ret = keyctl_pkey_query(key_serial, info, &result);
+    if (ret < 0) {
+        keyring_error(0, KEYRING_ERR_OPERATION,
+                     "Keyring query operation failed for sign");
+        return 0;
+    }
+
+    /* Verify output buffer is large enough */
+    if (*siglen < result.max_sig_size) {
+        keyring_error(0, KEYRING_ERR_OPERATION,
+                     "Output buffer too small for signature: need %u, have %zu",
+                     result.max_sig_size, *siglen);
+        return 0;
+    }
+
     /* Perform signature via kernel keyring */
-    ret = keyctl_pkey_sign(key_serial, info, tbs, tbslen, sig, *siglen);
+    ret = keyctl_pkey_sign(key_serial, info, tbs, tbslen, sig, result.max_sig_size);
     if (ret < 0) {
         keyring_error(0, KEYRING_ERR_OPERATION,
                      "Keyring sign operation failed: %ld", ret);

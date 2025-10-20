@@ -5,7 +5,7 @@
  * URI Format: keyring:path-attributes[?query-attributes]
  *
  * Path Attributes (semicolon-separated):
- *   id=<hex-serial>        - Keyring serial ID
+ *   id=<decimal-serial>    - Keyring serial ID (decimal)
  *   object=<description>   - Key description/label
  *   type=<key-type>        - Key type (private, public, cert)
  *   keyring=<name>         - Target keyring (session, user, persistent)
@@ -80,11 +80,11 @@ static int parse_attribute(keyring_uri_t *uri, const char *key, const char *valu
     char *decoded_value;
 
     if (strcmp(key, "id") == 0) {
-        /* Parse hex serial ID */
+        /* Parse decimal serial ID */
         char *endptr;
         long long id_val;
 
-        id_val = strtoll(value, &endptr, 16);
+        id_val = strtoll(value, &endptr, 10);
         if (*endptr != '\0' || id_val < 0) {
             keyring_error(0, KEYRING_ERR_INVALID_URI,
                          "Invalid keyring serial ID: %s", value);

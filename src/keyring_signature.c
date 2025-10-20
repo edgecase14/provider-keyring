@@ -85,6 +85,12 @@ static void keyring_sig_freectx(void *vctx)
     if (ctx->md != NULL)
         EVP_MD_free(ctx->md);
 
+    /* Free dynamically allocated strings (mdname is always dynamically allocated if not NULL) */
+    keyring_free((void *)ctx->mdname);
+    /* pad_mode might be static "pkcs1" default or dynamically allocated */
+    if (ctx->pad_mode != NULL && strcmp(ctx->pad_mode, "pkcs1") != 0)
+        keyring_free((void *)ctx->pad_mode);
+
     keyring_free(ctx);
 }
 
@@ -144,6 +150,12 @@ static int keyring_sig_sign(void *vctx, unsigned char *sig, size_t *siglen,
         return 0;
 
     key = ctx->key_ctx;
+
+    /* If sig is NULL, caller is querying for signature size */
+    if (sig == NULL) {
+        *siglen = (key->key_size + 7) / 8;  /* Return key size in bytes */
+        return 1;
+    }
 
     /* Use kernel keyring API - works for both software and TPM-backed keys */
     return keyring_pkey_sign(key->key_serial, tbs, tbslen, sig, siglen,
@@ -324,13 +336,17 @@ static int keyring_sig_set_ctx_params(void *vctx, const OSSL_PARAM params[])
         char *mdname = NULL;
         if (!OSSL_PARAM_get_utf8_string(p, &mdname, 0))
             return 0;
-        ctx->mdname = mdname;
+
+        /* Free old mdname if it exists */
+        keyring_free((void *)ctx->mdname);
+        /* Duplicate the string so we own it */
+        ctx->mdname = keyring_strdup(mdname);
+        OPENSSL_free(mdname);
 
         if (ctx->md != NULL)
             EVP_MD_free(ctx->md);
-        if (ctx->provctx != NULL)
-            ctx->md = EVP_MD_fetch(ctx->provctx->libctx, mdname, NULL);
-        OPENSSL_free(mdname);
+        if (ctx->provctx != NULL && ctx->mdname != NULL)
+            ctx->md = EVP_MD_fetch(ctx->provctx->libctx, ctx->mdname, NULL);
     }
 
     p = OSSL_PARAM_locate_const(params, OSSL_SIGNATURE_PARAM_PAD_MODE);
@@ -338,7 +354,12 @@ static int keyring_sig_set_ctx_params(void *vctx, const OSSL_PARAM params[])
         char *pad = NULL;
         if (!OSSL_PARAM_get_utf8_string(p, &pad, 0))
             return 0;
-        ctx->pad_mode = pad;  /* TODO: Should strdup this */
+
+        /* Free old pad_mode if it's not the default static string */
+        if (ctx->pad_mode != NULL && strcmp(ctx->pad_mode, "pkcs1") != 0)
+            keyring_free((void *)ctx->pad_mode);
+        /* Duplicate the string so we own it */
+        ctx->pad_mode = keyring_strdup(pad);
         OPENSSL_free(pad);
     }
 

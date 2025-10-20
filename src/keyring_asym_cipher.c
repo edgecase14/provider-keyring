@@ -76,6 +76,11 @@ static void keyring_cipher_freectx(void *vctx)
         EVP_MD_free(ctx->mgf1_md);
 
     keyring_free(ctx->oaep_label);
+
+    /* Free pad_mode if it's dynamically allocated (not the default static "pkcs1") */
+    if (ctx->pad_mode != NULL && strcmp(ctx->pad_mode, "pkcs1") != 0)
+        keyring_free((void *)ctx->pad_mode);
+
     keyring_free(ctx);
 }
 
@@ -237,7 +242,12 @@ static int keyring_cipher_set_ctx_params(void *vctx, const OSSL_PARAM params[])
         char *pad = NULL;
         if (!OSSL_PARAM_get_utf8_string(p, &pad, 0))
             return 0;
-        ctx->pad_mode = pad;  /* TODO: Should strdup this */
+
+        /* Free old pad_mode if it's not the default static string */
+        if (ctx->pad_mode != NULL && strcmp(ctx->pad_mode, "pkcs1") != 0)
+            keyring_free((void *)ctx->pad_mode);
+        /* Duplicate the string so we own it */
+        ctx->pad_mode = keyring_strdup(pad);
         OPENSSL_free(pad);
     }
 
