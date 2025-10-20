@@ -102,7 +102,7 @@ echo ""
 test_case "Generate key in session keyring"
 KEY_NAME="${TEST_KEY_PREFIX}-session"
 # Run in a keyctl session to ensure we have a valid session keyring
-if keyctl session test-session bash -c "$KEYGEN -b 2048 -d $KEY_NAME -k session && keyctl list @s | grep -q $KEY_NAME" >/dev/null 2>&1; then
+if keyctl session test-session bash -c "$KEYGEN -b 2048 -d $KEY_NAME -k @s && keyctl list @s | grep -q $KEY_NAME" >/dev/null 2>&1; then
     pass "Key loaded into session keyring"
 else
     fail "Key generation to session keyring failed"

@@ -29,22 +29,26 @@ static void usage(const char *prog)
     fprintf(stderr, "Options:\n");
     fprintf(stderr, "  -b, --bits <size>        Key size in bits (default: 2048)\n");
     fprintf(stderr, "  -d, --description <name> Key description/name (required)\n");
-    fprintf(stderr, "  -k, --keyring <type>     Target keyring: user, session, persistent (default: user)\n");
+    fprintf(stderr, "  -k, --keyring <spec>     Target keyring: @u, @s, @p (default: @u)\n");
+    fprintf(stderr, "                           @u = user keyring\n");
+    fprintf(stderr, "                           @s = session keyring\n");
+    fprintf(stderr, "                           @p = persistent keyring\n");
     fprintf(stderr, "  -h, --help               Show this help message\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "Examples:\n");
     fprintf(stderr, "  %s -b 2048 -d mykey\n", prog);
-    fprintf(stderr, "  %s -b 4096 -d mykey -k session\n", prog);
+    fprintf(stderr, "  %s -b 4096 -d mykey -k @s\n", prog);
     fprintf(stderr, "\n");
 }
 
 static key_serial_t parse_keyring_type(const char *type_str)
 {
-    if (strcmp(type_str, "session") == 0)
+    /* keyctl format only: @u, @s, @p */
+    if (strcmp(type_str, "@s") == 0)
         return KEY_SPEC_SESSION_KEYRING;
-    if (strcmp(type_str, "user") == 0)
+    if (strcmp(type_str, "@u") == 0)
         return KEY_SPEC_USER_KEYRING;
-    if (strcmp(type_str, "persistent") == 0) {
+    if (strcmp(type_str, "@p") == 0) {
 #ifdef KEY_SPEC_PERSISTENT_KEYRING
         return KEY_SPEC_PERSISTENT_KEYRING;
 #else
@@ -54,7 +58,7 @@ static key_serial_t parse_keyring_type(const char *type_str)
     }
 
     fprintf(stderr, "Invalid keyring type: %s\n", type_str);
-    fprintf(stderr, "Valid types: user, session, persistent\n");
+    fprintf(stderr, "Valid types: @u (user), @s (session), @p (persistent)\n");
     exit(1);
 }
 
@@ -163,7 +167,7 @@ int main(int argc, char *argv[])
 {
     int bits = 2048;
     const char *description = NULL;
-    const char *keyring_type = "user";
+    const char *keyring_type = "@u";
     key_serial_t keyring;
     EVP_PKEY *pkey = NULL;
     unsigned char *der = NULL;
