@@ -437,6 +437,8 @@ static const OSSL_PARAM keyring_rsa_gettable_param_types[] = {
     OSSL_PARAM_int(OSSL_PKEY_PARAM_SECURITY_BITS, NULL),
     OSSL_PARAM_int(OSSL_PKEY_PARAM_MAX_SIZE, NULL),
     OSSL_PARAM_utf8_string(OSSL_PKEY_PARAM_DEFAULT_DIGEST, NULL, 0),
+    OSSL_PARAM_BN(OSSL_PKEY_PARAM_RSA_N, NULL, 0),
+    OSSL_PARAM_BN(OSSL_PKEY_PARAM_RSA_E, NULL, 0),
     OSSL_PARAM_END
 };
 
@@ -449,10 +451,13 @@ static int keyring_rsa_get_params(void *keydata, OSSL_PARAM params[])
 {
     keyring_key_ctx_t *ctx = keydata;
     OSSL_PARAM *p;
+    BIGNUM *n = NULL, *e = NULL;
+    int ret = 1;
 
     if (ctx == NULL)
         return 0;
 
+    /* Integer parameters */
     p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_BITS);
     if (p != NULL && !OSSL_PARAM_set_int(p, ctx->key_size))
         return 0;
@@ -479,7 +484,36 @@ static int keyring_rsa_get_params(void *keydata, OSSL_PARAM params[])
     if (p != NULL && !OSSL_PARAM_set_utf8_string(p, "SHA256"))
         return 0;
 
-    return 1;
+    /* BIGNUM parameters - need cached evp_pkey */
+    if (ctx->evp_pkey == NULL)
+        return 1;  /* No public key available, but other params succeeded */
+
+    /* RSA modulus (n) */
+    p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_RSA_N);
+    if (p != NULL) {
+        if (!EVP_PKEY_get_bn_param(ctx->evp_pkey, OSSL_PKEY_PARAM_RSA_N, &n))
+            return 0;
+        if (!OSSL_PARAM_set_BN(p, n)) {
+            ret = 0;
+            goto cleanup;
+        }
+    }
+
+    /* RSA public exponent (e) */
+    p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_RSA_E);
+    if (p != NULL) {
+        if (!EVP_PKEY_get_bn_param(ctx->evp_pkey, OSSL_PKEY_PARAM_RSA_E, &e))
+            return 0;
+        if (!OSSL_PARAM_set_BN(p, e)) {
+            ret = 0;
+            goto cleanup;
+        }
+    }
+
+cleanup:
+    BN_free(n);
+    BN_free(e);
+    return ret;
 }
 
 static const char *keyring_rsa_query_operation_name(int operation_id)

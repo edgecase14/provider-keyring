@@ -149,10 +149,12 @@ int keyring_key_query(key_serial_t key_serial, unsigned int *key_size,
 
     memset(&result, 0, sizeof(result));
 
-    ret = keyctl_pkey_query(key_serial, "", &result);
+    /* Try with a basic info string - empty string may not work on all kernels */
+    ret = keyctl_pkey_query(key_serial, "enc=pkcs1", &result);
     if (ret < 0) {
         keyring_error(0, KEYRING_ERR_OPERATION,
-                     "Failed to query key %d: %ld", key_serial, ret);
+                     "Failed to query key %d: %ld (errno=%d: %s)",
+                     key_serial, ret, errno, strerror(errno));
         return 0;
     }
 

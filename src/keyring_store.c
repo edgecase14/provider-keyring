@@ -187,7 +187,8 @@ static int keyring_store_load(void *loaderctx, OSSL_CALLBACK *object_cb,
 
     /* Pass address of ctx->key (stable memory, not stack) */
     params[param_idx++] = OSSL_PARAM_construct_octet_ptr(OSSL_OBJECT_PARAM_REFERENCE,
-                                                         (void **)&ctx->key, 0);
+                                                         (void **)&ctx->key,
+                                                         sizeof(keyring_key_ctx_t *));
     params[param_idx++] = OSSL_PARAM_construct_end();
 
     /* Call the object callback */
